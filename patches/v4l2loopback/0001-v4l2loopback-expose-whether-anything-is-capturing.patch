@@ -1,0 +1,124 @@
+From d985339c59bafd736671ceeccd2dbe904f581e31 Mon Sep 17 00:00:00 2001
+From: Chiron <chiron@localhost>
+Date: Mon, 31 Aug 2026 09:36:34 +0000
+Subject: [PATCH] v4l2loopback: expose whether anything is capturing
+
+The producer feeding this loopback cannot tell whether its frames are being
+consumed. Publishing 1920x1080 NV12 at 30 fps costs roughly 93 MB/s of copying,
+and on this board that runs for the whole uptime: the vendor ISP does not
+survive being stopped and started again, so the hardware stream is never torn
+down and the bridge keeps copying into a node nobody reads.
+
+Count the openers that have STREAMON.d a capture and not yet stopped or closed
+it, and publish that count as a read-only capture_active attribute beside the
+existing format and buffers ones. A producer can poll it and skip the copy
+while it reads zero, without touching the hardware stream.
+
+The opener type is deliberately left alone on STREAMOFF: poll() and the read
+path key off it, and this is meant to add bookkeeping and nothing else.
+---
+ v4l2loopback.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/v4l2loopback.c b/v4l2loopback.c
+index 7e47a43..2857558 100644
+--- a/v4l2loopback.c
++++ b/v4l2loopback.c
+@@ -373,6 +373,7 @@ struct v4l2_loopback_device {
+ 
+ 	/* sync stuff */
+ 	atomic_t open_count;
++	atomic_t active_readers; /* openers with a capture streamed on */
+ 
+ 	int ready_for_capture; /* set to true when at least one writer opened
+ 			       * device and negotiated format */
+@@ -403,6 +404,7 @@ struct v4l2_loopback_opener {
+ 	struct v4l2_buffer *buffers;
+ 	int buffers_number; /* should not be big, 4 is a good choice */
+ 	int timeout_image_io;
++	int counted_reader; /* counted in dev->active_readers */
+ 
+ 	struct v4l2_fh fh;
+ };
+@@ -556,6 +558,19 @@ static ssize_t attr_show_buffers(struct device *cd,
+ 
+ static DEVICE_ATTR(buffers, S_IRUGO, attr_show_buffers, NULL);
+ 
++static ssize_t attr_show_capture_active(struct device *cd,
++					struct device_attribute *attr, char *buf)
++{
++	struct v4l2_loopback_device *dev = v4l2loopback_cd2dev(cd);
++
++	if (!dev)
++		return -ENODEV;
++
++	return sprintf(buf, "%d\n", atomic_read(&dev->active_readers));
++}
++
++static DEVICE_ATTR(capture_active, S_IRUGO, attr_show_capture_active, NULL);
++
+ static ssize_t attr_show_maxopeners(struct device *cd,
+ 				    struct device_attribute *attr, char *buf)
+ {
+@@ -604,6 +619,7 @@ static void v4l2loopback_remove_sysfs(struct video_device *vdev)
+ 	if (vdev) {
+ 		V4L2_SYSFS_DESTROY(format);
+ 		V4L2_SYSFS_DESTROY(buffers);
++		V4L2_SYSFS_DESTROY(capture_active);
+ 		V4L2_SYSFS_DESTROY(max_openers);
+ 		/* ... */
+ 	}
+@@ -622,6 +638,7 @@ static void v4l2loopback_create_sysfs(struct video_device *vdev)
+ 	do {
+ 		V4L2_SYSFS_CREATE(format);
+ 		V4L2_SYSFS_CREATE(buffers);
++		V4L2_SYSFS_CREATE(capture_active);
+ 		V4L2_SYSFS_CREATE(max_openers);
+ 		/* ... */
+ 	} while (0);
+@@ -1741,6 +1758,10 @@ static int vidioc_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
+ 		return 0;
+ 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+ 		opener->type = READER;
++		if (!opener->counted_reader) {
++			opener->counted_reader = 1;
++			atomic_inc(&dev->active_readers);
++		}
+ 		if (!dev->ready_for_capture)
+ 			return -EIO;
+ 		return 0;
+@@ -1756,8 +1777,22 @@ static int vidioc_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
+ static int vidioc_streamoff(struct file *file, void *fh,
+ 			    enum v4l2_buf_type type)
+ {
++	struct v4l2_loopback_device *dev;
++	struct v4l2_loopback_opener *opener;
+ 	MARK();
+ 	dprintk("%d\n", type);
++
++	/* Stop counting this opener as a consumer. The opener type is left
++	 * alone on purpose: poll() and the read path key off it, and changing
++	 * it here would alter behaviour beyond the bookkeeping this adds. */
++	if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
++		dev = v4l2loopback_getdevice(file);
++		opener = fh_to_opener(fh);
++		if (opener->counted_reader) {
++			opener->counted_reader = 0;
++			atomic_dec(&dev->active_readers);
++		}
++	}
+ 	return 0;
+ }
+ 
+@@ -1989,6 +2024,11 @@ static int v4l2_loopback_close(struct file *file)
+ 	if (WRITER == opener->type)
+ 		iswriter = 1;
+ 
++	if (opener->counted_reader) {
++		opener->counted_reader = 0;
++		atomic_dec(&dev->active_readers);
++	}
++
+ 	atomic_dec(&dev->open_count);
+ 	if (dev->open_count.counter == 0) {
+ 		del_timer_sync(&dev->sustain_timer);

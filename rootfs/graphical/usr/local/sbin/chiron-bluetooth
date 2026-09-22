@@ -1,0 +1,72 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Initialise the W2 Bluetooth core and hand its UART to the kernel H4 driver.
+#
+# The loader does the attach itself rather than exec'ing btattach. BlueZ 5.85
+# in this release never applies the 4 Mbit/s the controller runs at: its
+# binary calls no cfset*() at all and the port stays at speed 0 after the line
+# discipline is attached, so hci0 comes up DOWN with a zero address and reads
+# nothing. Our own attach uses the stable kernel HCI UART uAPI -- TIOCSETD,
+# HCIUARTSETFLAGS, HCIUARTSETPROTO, HCIUARTGETDEVICE -- which does not depend
+# on any BlueZ or libc version. chiron-bt-init -A holds the UART until it is
+# signalled, so this service stays running for as long as hci0 exists.
+set -eu
+
+LOADER=/usr/local/sbin/chiron-bt-init
+FIRMWARE=/usr/lib/firmware/amlbt/w2_bt_fw_uart.bin
+
+# W2 power is a platform rfkill named bt-dev. `rfkill block bluetooth` is the
+# wrong instrument once hci0 exists: it takes the HCI rfkill with it, which
+# powers the controller down and back up underneath BlueZ and can wedge it.
+# The numeric id is not stable across a power cycle -- the controller is fully
+# removed and re-registered, so hci0's rfkill returns with a new number -- so
+# resolve bt-dev by name and type every time, and refuse to guess if the
+# board ever presents more than one.
+find_platform_rfkill()
+{
+    found=
+    for path in /sys/class/rfkill/rfkill*; do
+        [ -r "$path/name" ] || continue
+        [ -r "$path/type" ] || continue
+        [ "$(cat "$path/name")" = bt-dev ] || continue
+        [ "$(cat "$path/type")" = bluetooth ] || continue
+        [ -z "$found" ] || {
+            echo "[chiron-bt] more than one bt-dev rfkill; refusing to guess" >&2
+            exit 1
+        }
+        found=${path##*rfkill}
+    done
+    [ -n "$found" ] || {
+        echo "[chiron-bt] platform bt-dev rfkill not found" >&2
+        exit 1
+    }
+    printf '%s\n' "$found"
+}
+
+# ExecStopPost path: drop the platform rail after the loader has released the
+# line discipline, which is what removes hci0.
+if [ "${1:-}" = --power-off ]; then
+    rfkill block "$(find_platform_rfkill)"
+    exit 0
+fi
+[ "$#" -eq 0 ] || {
+    echo "usage: $0 [--power-off]" >&2
+    exit 2
+}
+
+platform_id=$(find_platform_rfkill)
+
+# W2 is powered separately from the SoC, so a hardware reset can leave it
+# running at 4 Mbit/s while Linux starts again from ROM defaults. Return it to
+# a known power-off state first. The rfkill callback returns before the ROM is
+# consistently ready to answer its first 115200-baud command, hence the waits.
+rfkill block "$platform_id"
+sleep 1
+rfkill unblock "$platform_id"
+sleep 1
+
+# A failed transfer is retried by restarting the unit, not from here: the
+# loader replaces this shell and then holds the UART, so there is nothing left
+# to retry in. Restart=on-failure repeats this whole script, power cycle first.
+exec "$LOADER" -A -f "$FIRMWARE"

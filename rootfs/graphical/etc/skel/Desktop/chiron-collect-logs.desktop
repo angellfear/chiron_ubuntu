@@ -1,0 +1,10 @@
+[Desktop Entry]
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+Type=Application
+Name=Собрать логи
+Comment=Заархивировать журналы и записи о сбоях на рабочий стол
+Exec=/usr/local/bin/chiron-collect-logs
+Icon=utilities-log-viewer
+Terminal=false
+Categories=System;

@@ -1,0 +1,4 @@
+# One relative patch path per line after hardware acceptance.
+0001-Chiron-production-delta-panfrost-reset-quirk-aml_mpt.patch
+0002-Bluetooth-SCO-take-the-listening-socket-lock-before-.patch
+0003-drm-panfrost-synchronize-and-disable-interrupts-befo.patch

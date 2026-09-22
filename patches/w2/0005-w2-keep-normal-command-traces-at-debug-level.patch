@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Thu, 3 Sep 2026 20:05:00 +0000
+Subject: [PATCH] w2: keep normal command traces at debug level
+
+The W2 command manager logs every normal firmware command with printk().
+This makes successful SDIO command completions, including the vendor's
+expected -4 status during eFuse reads, look like kernel errors and floods
+the journal during routine scans.
+
+Keep cmd_dump() at error level for actual command-manager failures.  Restore
+the original debug level for the routine CMD_PRINT() trace so it remains
+available for debugging without polluting normal boot and scan logs.
+---
+ aml_drv/aml_cmds.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/aml_drv/aml_cmds.c b/aml_drv/aml_cmds.c
+index b74f156..1eebc64 100644
+--- a/aml_drv/aml_cmds.c
++++ b/aml_drv/aml_cmds.c
+@@ -38,7 +38,7 @@ static void cmd_dump(const struct aml_cmd *cmd)
+ 
+ #define CMD_PRINT(cmd) do { \
+     if (cmd->id != ME_TRAFFIC_IND_REQ) { \
+-        printk("[%-20.20s %4d] cmd tkn[%d]  flags:%04x  result:%3d  cmd:%4d-%-24s - reqcfm(%4d-%-s)\n", \
++        pr_debug("[%-20.20s %4d] cmd tkn[%d]  flags:%04x  result:%3d  cmd:%4d-%-24s - reqcfm(%4d-%-s)\n", \
+                __func__, __LINE__,  \
+                cmd->tkn, cmd->flags, cmd->result, cmd->id, cmd->id == MM_OTHER_REQ ? AML_MM_OTHER_CMD2STR(cmd) : AML_ID2STR(cmd->id), \
+                cmd->reqid, (((cmd->flags & AML_CMD_FLAG_REQ_CFM) && \
+-- 
+2.43.0

@@ -1,0 +1,306 @@
+From ebf24827fe39b6c0cf76a195dc0727db50dc552e Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Mon, 21 Sep 2026 17:53:22 +0000
+Subject: [PATCH] drm/panfrost: synchronize and disable interrupts before
+ powering off
+
+Backport of upstream b98e9a84d38a and 157ad4ccff07 (v6.8) to 5.15:
+mask the GPU, JOB and MMU interrupts and synchronize their handlers
+before panfrost_device_suspend powers the domain off, and ignore IRQs
+that arrive while suspended (is_suspended bits, cleared in the reset
+and enable paths).
+
+On this board the runtime-suspended Mali delivered Asynchronous SError
+panics (0xbf000000) three times: at 43h47m into an idle desktop, at
+22h55m delivered inside drm_sched_select_entity on the pan_js thread,
+and once during first-boot display bring-up.
+
+Change-Id: I3e0f32fc9113acee701e109b75c7b8e6c4755818
+---
+ drivers/gpu/drm/panfrost/panfrost_device.c |  3 +++
+ drivers/gpu/drm/panfrost/panfrost_device.h | 10 ++++++++
+ drivers/gpu/drm/panfrost/panfrost_gpu.c    | 28 +++++++++++++++-----
+ drivers/gpu/drm/panfrost/panfrost_gpu.h    |  1 +
+ drivers/gpu/drm/panfrost/panfrost_job.c    | 26 ++++++++++++++++---
+ drivers/gpu/drm/panfrost/panfrost_job.h    |  1 +
+ drivers/gpu/drm/panfrost/panfrost_mmu.c    | 30 +++++++++++++++++-----
+ drivers/gpu/drm/panfrost/panfrost_mmu.h    |  1 +
+ 8 files changed, 83 insertions(+), 17 deletions(-)
+
+diff --git a/drivers/gpu/drm/panfrost/panfrost_device.c b/drivers/gpu/drm/panfrost/panfrost_device.c
+index bd9b7be63b0f..068cc6f75478 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_device.c
++++ b/drivers/gpu/drm/panfrost/panfrost_device.c
+@@ -418,6 +418,9 @@ int panfrost_device_suspend(struct device *dev)
+ 		return -EBUSY;
+ 
+ 	panfrost_devfreq_suspend(pfdev);
++	panfrost_job_suspend_irq(pfdev);
++	panfrost_mmu_suspend_irq(pfdev);
++	panfrost_gpu_suspend_irq(pfdev);
+ 	panfrost_gpu_power_off(pfdev);
+ 
+ 	return 0;
+diff --git a/drivers/gpu/drm/panfrost/panfrost_device.h b/drivers/gpu/drm/panfrost/panfrost_device.h
+index 8b25278f34c8..abe6dae26f85 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_device.h
++++ b/drivers/gpu/drm/panfrost/panfrost_device.h
+@@ -24,6 +24,13 @@ struct panfrost_perfcnt;
+ #define NUM_JOB_SLOTS 3
+ #define MAX_PM_DOMAINS 3
+ 
++enum panfrost_drv_comp_bits {
++	PANFROST_COMP_BIT_GPU,
++	PANFROST_COMP_BIT_JOB,
++	PANFROST_COMP_BIT_MMU,
++	PANFROST_COMP_BIT_MAX
++};
++
+ struct panfrost_features {
+ 	u16 id;
+ 	u16 revision;
+@@ -80,6 +87,8 @@ struct panfrost_device {
+ 	struct device *dev;
+ 	struct drm_device *ddev;
+ 	struct platform_device *pdev;
++	int gpu_irq;
++	int mmu_irq;
+ 
+ 	void __iomem *iomem;
+ 	struct clk *clock;
+@@ -93,6 +102,7 @@ struct panfrost_device {
+ 
+ 	struct panfrost_features features;
+ 	const struct panfrost_compatible *comp;
++	DECLARE_BITMAP(is_suspended, PANFROST_COMP_BIT_MAX);
+ 
+ 	spinlock_t as_lock;
+ 	unsigned long as_in_use_mask;
+diff --git a/drivers/gpu/drm/panfrost/panfrost_gpu.c b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+index 688ddeb729c8..5b54f9be4305 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_gpu.c
++++ b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+@@ -22,8 +22,13 @@
+ static irqreturn_t panfrost_gpu_irq_handler(int irq, void *data)
+ {
+ 	struct panfrost_device *pfdev = data;
+-	u32 state = gpu_read(pfdev, GPU_INT_STAT);
+-	u32 fault_status = gpu_read(pfdev, GPU_FAULT_STATUS);
++	u32 state, fault_status;
++
++	if (test_bit(PANFROST_COMP_BIT_GPU, pfdev->is_suspended))
++		return IRQ_NONE;
++
++	fault_status = gpu_read(pfdev, GPU_FAULT_STATUS);
++	state = gpu_read(pfdev, GPU_INT_STAT);
+ 
+ 	if (!state)
+ 		return IRQ_NONE;
+@@ -60,6 +65,9 @@ int panfrost_gpu_soft_reset(struct panfrost_device *pfdev)
+ 
+ 	gpu_write(pfdev, GPU_INT_MASK, 0);
+ 	gpu_write(pfdev, GPU_INT_CLEAR, GPU_IRQ_RESET_COMPLETED);
++
++	clear_bit(PANFROST_COMP_BIT_GPU, pfdev->is_suspended);
++
+ 	gpu_write(pfdev, GPU_CMD, GPU_CMD_SOFT_RESET);
+ 
+ 	ret = readl_relaxed_poll_timeout(pfdev->iomem + GPU_INT_RAWSTAT,
+@@ -351,9 +359,17 @@ void panfrost_gpu_power_off(struct panfrost_device *pfdev)
+ 	gpu_write(pfdev, L2_PWROFF_LO, 0);
+ }
+ 
++void panfrost_gpu_suspend_irq(struct panfrost_device *pfdev)
++{
++	set_bit(PANFROST_COMP_BIT_GPU, pfdev->is_suspended);
++
++	gpu_write(pfdev, GPU_INT_MASK, 0);
++	synchronize_irq(pfdev->gpu_irq);
++}
++
+ int panfrost_gpu_init(struct panfrost_device *pfdev)
+ {
+-	int err, irq;
++	int err;
+ 
+ 	err = panfrost_gpu_soft_reset(pfdev);
+ 	if (err)
+@@ -368,11 +384,11 @@ int panfrost_gpu_init(struct panfrost_device *pfdev)
+ 
+ 	dma_set_max_seg_size(pfdev->dev, UINT_MAX);
+ 
+-	irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "gpu");
+-	if (irq <= 0)
++	pfdev->gpu_irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "gpu");
++	if (pfdev->gpu_irq <= 0)
+ 		return -ENODEV;
+ 
+-	err = devm_request_irq(pfdev->dev, irq, panfrost_gpu_irq_handler,
++	err = devm_request_irq(pfdev->dev, pfdev->gpu_irq, panfrost_gpu_irq_handler,
+ 			       IRQF_SHARED, KBUILD_MODNAME "-gpu", pfdev);
+ 	if (err) {
+ 		dev_err(pfdev->dev, "failed to request gpu irq");
+diff --git a/drivers/gpu/drm/panfrost/panfrost_gpu.h b/drivers/gpu/drm/panfrost/panfrost_gpu.h
+index 468c51e7e46d..6422703f0f0c 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_gpu.h
++++ b/drivers/gpu/drm/panfrost/panfrost_gpu.h
+@@ -15,6 +15,7 @@ u32 panfrost_gpu_get_latest_flush_id(struct panfrost_device *pfdev);
+ int panfrost_gpu_soft_reset(struct panfrost_device *pfdev);
+ void panfrost_gpu_power_on(struct panfrost_device *pfdev);
+ void panfrost_gpu_power_off(struct panfrost_device *pfdev);
++void panfrost_gpu_suspend_irq(struct panfrost_device *pfdev);
+ 
+ void panfrost_gpu_amlogic_quirk(struct panfrost_device *pfdev);
+ 
+diff --git a/drivers/gpu/drm/panfrost/panfrost_job.c b/drivers/gpu/drm/panfrost/panfrost_job.c
+index 71a72fb50e6b..4fcd40c990d8 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_job.c
++++ b/drivers/gpu/drm/panfrost/panfrost_job.c
+@@ -408,6 +408,8 @@ void panfrost_job_enable_interrupts(struct panfrost_device *pfdev)
+ 	int j;
+ 	u32 irq_mask = 0;
+ 
++	clear_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended);
++
+ 	for (j = 0; j < NUM_JOB_SLOTS; j++) {
+ 		irq_mask |= MK_JS_MASK(j);
+ 	}
+@@ -416,6 +418,14 @@ void panfrost_job_enable_interrupts(struct panfrost_device *pfdev)
+ 	job_write(pfdev, JOB_INT_MASK, irq_mask);
+ }
+ 
++void panfrost_job_suspend_irq(struct panfrost_device *pfdev)
++{
++	set_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended);
++
++	job_write(pfdev, JOB_INT_MASK, 0);
++	synchronize_irq(pfdev->js->irq);
++}
++
+ static void panfrost_job_handle_err(struct panfrost_device *pfdev,
+ 				    struct panfrost_job *job,
+ 				    unsigned int js)
+@@ -774,16 +784,24 @@ static irqreturn_t panfrost_job_irq_handler_thread(int irq, void *data)
+ 	struct panfrost_device *pfdev = data;
+ 
+ 	panfrost_job_handle_irqs(pfdev);
+-	job_write(pfdev, JOB_INT_MASK,
+-		  GENMASK(16 + NUM_JOB_SLOTS - 1, 16) |
+-		  GENMASK(NUM_JOB_SLOTS - 1, 0));
++
++	/* Enable interrupts only if we're not about to get suspended */
++	if (!test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended))
++		job_write(pfdev, JOB_INT_MASK,
++			  GENMASK(16 + NUM_JOB_SLOTS - 1, 16) |
++			  GENMASK(NUM_JOB_SLOTS - 1, 0));
+ 	return IRQ_HANDLED;
+ }
+ 
+ static irqreturn_t panfrost_job_irq_handler(int irq, void *data)
+ {
+ 	struct panfrost_device *pfdev = data;
+-	u32 status = job_read(pfdev, JOB_INT_STAT);
++	u32 status;
++
++	if (test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended))
++		return IRQ_NONE;
++
++	status = job_read(pfdev, JOB_INT_STAT);
+ 
+ 	if (!status)
+ 		return IRQ_NONE;
+diff --git a/drivers/gpu/drm/panfrost/panfrost_job.h b/drivers/gpu/drm/panfrost/panfrost_job.h
+index 82306a03b57e..8b9ea7240080 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_job.h
++++ b/drivers/gpu/drm/panfrost/panfrost_job.h
+@@ -45,6 +45,7 @@ void panfrost_job_close(struct panfrost_file_priv *panfrost_priv);
+ int panfrost_job_push(struct panfrost_job *job);
+ void panfrost_job_put(struct panfrost_job *job);
+ void panfrost_job_enable_interrupts(struct panfrost_device *pfdev);
++void panfrost_job_suspend_irq(struct panfrost_device *pfdev);
+ int panfrost_job_is_idle(struct panfrost_device *pfdev);
+ 
+ #endif
+diff --git a/drivers/gpu/drm/panfrost/panfrost_mmu.c b/drivers/gpu/drm/panfrost/panfrost_mmu.c
+index fb2b4b5eba6b..aeba4986727e 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_mmu.c
++++ b/drivers/gpu/drm/panfrost/panfrost_mmu.c
+@@ -215,6 +215,8 @@ void panfrost_mmu_reset(struct panfrost_device *pfdev)
+ {
+ 	struct panfrost_mmu *mmu, *mmu_tmp;
+ 
++	clear_bit(PANFROST_COMP_BIT_MMU, pfdev->is_suspended);
++
+ 	spin_lock(&pfdev->as_lock);
+ 
+ 	pfdev->as_alloc_mask = 0;
+@@ -632,6 +634,9 @@ static irqreturn_t panfrost_mmu_irq_handler(int irq, void *data)
+ {
+ 	struct panfrost_device *pfdev = data;
+ 
++	if (test_bit(PANFROST_COMP_BIT_MMU, pfdev->is_suspended))
++		return IRQ_NONE;
++
+ 	if (!mmu_read(pfdev, MMU_INT_STAT))
+ 		return IRQ_NONE;
+ 
+@@ -706,22 +711,25 @@ static irqreturn_t panfrost_mmu_irq_handler_thread(int irq, void *data)
+ 			status = mmu_read(pfdev, MMU_INT_RAWSTAT) & ~pfdev->as_faulty_mask;
+ 	}
+ 
+-	spin_lock(&pfdev->as_lock);
+-	mmu_write(pfdev, MMU_INT_MASK, ~pfdev->as_faulty_mask);
+-	spin_unlock(&pfdev->as_lock);
++	/* Enable interrupts only if we're not about to get suspended */
++	if (!test_bit(PANFROST_COMP_BIT_MMU, pfdev->is_suspended)) {
++		spin_lock(&pfdev->as_lock);
++		mmu_write(pfdev, MMU_INT_MASK, ~pfdev->as_faulty_mask);
++		spin_unlock(&pfdev->as_lock);
++	}
+ 
+ 	return IRQ_HANDLED;
+ };
+ 
+ int panfrost_mmu_init(struct panfrost_device *pfdev)
+ {
+-	int err, irq;
++	int err;
+ 
+-	irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "mmu");
+-	if (irq <= 0)
++	pfdev->mmu_irq = platform_get_irq_byname(to_platform_device(pfdev->dev), "mmu");
++	if (pfdev->mmu_irq <= 0)
+ 		return -ENODEV;
+ 
+-	err = devm_request_threaded_irq(pfdev->dev, irq,
++	err = devm_request_threaded_irq(pfdev->dev, pfdev->mmu_irq,
+ 					panfrost_mmu_irq_handler,
+ 					panfrost_mmu_irq_handler_thread,
+ 					IRQF_SHARED, KBUILD_MODNAME "-mmu",
+@@ -739,3 +747,11 @@ void panfrost_mmu_fini(struct panfrost_device *pfdev)
+ {
+ 	mmu_write(pfdev, MMU_INT_MASK, 0);
+ }
++
++void panfrost_mmu_suspend_irq(struct panfrost_device *pfdev)
++{
++	set_bit(PANFROST_COMP_BIT_MMU, pfdev->is_suspended);
++
++	mmu_write(pfdev, MMU_INT_MASK, 0);
++	synchronize_irq(pfdev->mmu_irq);
++}
+diff --git a/drivers/gpu/drm/panfrost/panfrost_mmu.h b/drivers/gpu/drm/panfrost/panfrost_mmu.h
+index cc2a0d307feb..022a9a74a114 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_mmu.h
++++ b/drivers/gpu/drm/panfrost/panfrost_mmu.h
+@@ -14,6 +14,7 @@ void panfrost_mmu_unmap(struct panfrost_gem_mapping *mapping);
+ int panfrost_mmu_init(struct panfrost_device *pfdev);
+ void panfrost_mmu_fini(struct panfrost_device *pfdev);
+ void panfrost_mmu_reset(struct panfrost_device *pfdev);
++void panfrost_mmu_suspend_irq(struct panfrost_device *pfdev);
+ 
+ u32 panfrost_mmu_as_get(struct panfrost_device *pfdev, struct panfrost_mmu *mmu);
+ void panfrost_mmu_as_put(struct panfrost_device *pfdev, struct panfrost_mmu *mmu);
+-- 
+2.43.0
+

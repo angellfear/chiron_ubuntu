@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 40/44] media: amlcam: publish one validated output mode on the
+ public stream
+
+AML_ISP_STREAM_0 is the node ordinary applications open. Pin it to the
+single mode the ISP is actually configured for -- 1920x1080 NV12, four
+buffers -- and stop enumerating alternatives the pipeline cannot deliver.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlcam/cam_common/aml_video.c | 31 +++++++++++++++++++-
+ 1 file changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/amlisp/amlcam/cam_common/aml_video.c b/drivers/amlisp/amlcam/cam_common/aml_video.c
+index 2343abdae..55a753e2d 100644
+--- a/drivers/amlisp/amlcam/cam_common/aml_video.c
++++ b/drivers/amlisp/amlcam/cam_common/aml_video.c
+@@ -47,14 +47,26 @@ static struct cam_device * aml_video_to_cam_device(struct aml_video *video)
+ 
+ static int video_verify_fmt(struct aml_video *video, struct v4l2_format *fmt)
+ {
++	const bool public_output = video->id == AML_ISP_STREAM_0;
+ 	u32 i = 0;
+ 	int rtn = -EINVAL;
+ 
++	if (public_output) {
++		fmt->type = video->type;
++		fmt->fmt.pix.width = 1920;
++		fmt->fmt.pix.height = 1080;
++		fmt->fmt.pix.field = V4L2_FIELD_NONE;
++		fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
++		fmt->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
++	}
++
+ 	for (i = 0; i < video->fmt_cnt; i++) {
+ 		if (fmt->fmt.pix.pixelformat == video->format[i].fourcc) {
+ 			fmt->fmt.pix.sizeimage = DATA_ALIGN(fmt->fmt.pix.width, 16) *
+ 					fmt->fmt.pix.height *
+ 					video->format[i].bpp / 8;
++			if (public_output)
++				fmt->fmt.pix.bytesperline = fmt->fmt.pix.width;
+ 			rtn = 0;
+ 			break;
+ 		}
+@@ -166,6 +178,9 @@ static int video_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *fmt)
+ 	if (fmt->type != video->type || fmt->index >= video->fmt_cnt)
+ 		return -EINVAL;
+ 
++	if (video->id == AML_ISP_STREAM_0 && fmt->index)
++		return -EINVAL;
++
+ 	if (AML_ISP_STREAM_PARAM == video->id) {
+ 		const unsigned sz = sizeof(fmt->description);
+ 		strscpy(fmt->description, "AML 3A PARAM", sz);
+@@ -372,7 +387,8 @@ static int video_g_parm(struct file *file, void *fh,
+ 	capture->capability = V4L2_CAP_TIMEPERFRAME;
+ 	capture->timeperframe.numerator = 1;
+ 	capture->timeperframe.denominator = 30;
+-	capture->readbuffers = video->min_buffer_count;
++	capture->readbuffers = video->id == AML_ISP_STREAM_0 ? 4 :
++				       video->min_buffer_count;
+ 	return 0;
+ }
+ 
+@@ -398,6 +414,16 @@ static int video_enum_framesizes(struct file *file, void *fh,
+ 	struct aml_video *video = video_drvdata(file);
+ 	unsigned int i;
+ 
++	if (video->id == AML_ISP_STREAM_0) {
++		if (fsize->index ||
++		    fsize->pixel_format != V4L2_PIX_FMT_NV12)
++			return -EINVAL;
++		fsize->type = V4L2_FRMSIZE_TYPE_DISCRETE;
++		fsize->discrete.width = 1920;
++		fsize->discrete.height = 1080;
++		return 0;
++	}
++
+ 	if (fsize->index >= ARRAY_SIZE(sizes))
+ 		return -EINVAL;
+ 	for (i = 0; i < video->fmt_cnt; i++) {
+@@ -477,6 +503,9 @@ static int video_buff_queue_setup(struct vb2_queue *queue,
+ 	struct aml_video *video = queue->drv_priv;
+ 	const struct v4l2_pix_format *pix = &video->f_current.fmt.pix;
+ 
++	if (video->id == AML_ISP_STREAM_0 && *num_buffers < 4)
++		*num_buffers = 4;
++
+ 	if (*num_planes) {
+ 		if (sizes[0] < pix->sizeimage)
+ 			return -EINVAL;

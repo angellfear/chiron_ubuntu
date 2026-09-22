@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+#
+# The release pocket alone is what debootstrap leaves behind: the image then
+# never sees a security fix, neither at build time nor on the device. These are
+# the two pockets a stock Ubuntu install carries on top of it.
+Types: deb
+URIs: http://ports.ubuntu.com/ubuntu-ports
+Suites: resolute-updates resolute-security
+Components: main universe
+Architectures: arm64
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# greetd: this is a single-user appliance with a touchscreen and no keyboard, so
+# the session starts without a greeter. greetd is still the right mechanism
+# rather than a getty autologin: it opens a real logind session on its own VT,
+# which is what gives the compositor its seat and its DRM master.
+#
+# initial_session runs once, at boot. A `systemctl restart greetd` deliberately
+# falls through to default_session -- that is greetd's design, not a fault; use
+# it to get a text console back after a compositor crash.
+
+[terminal]
+vt = 7
+
+[initial_session]
+command = "/usr/local/bin/wayfire-session"
+user = "user"
+
+[default_session]
+command = "agreety --cmd /bin/bash"
+user = "_greetd"

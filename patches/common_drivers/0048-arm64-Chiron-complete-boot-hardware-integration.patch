@@ -1,0 +1,321 @@
+From 8a88cc7c20e96ff6bfa54541cbef5357a1ad92ba Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Tue, 1 Sep 2026 13:05:04 +0000
+Subject: [PATCH] arm64: Chiron: complete boot hardware integration
+
+Describe the fitted thermal sensors and absent Ethernet PHY, complete the panel backlight pin states, provide autofs, and avoid optional media and PDM resources that are not present on Chiron.
+
+Expose the CSI clock-mode control and identify the fitted OV13B10 by the clean ID returned at address 0x36. This replaces the vendor detector behavior that accidentally combined a failed read with the real sensor ID.
+
+Also disable unsupported firmware FIQ diagnostics without a stack dump.
+
+Change-Id: Ib7c71709e8dac3e565d070223ad5c89f3c378446
+---
+ arch/arm64/boot/dts/amlogic/chiron-panel.dtsi |  5 +-
+ arch/arm64/boot/dts/amlogic/chiron.dts        | 19 ++++
+ arch/arm64/configs/chiron_defconfig           |  3 +-
+ drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c  | 92 ++++++++++++-------
+ drivers/amlisp/amlsens/ov13b10/aml_ov13b10.h  |  2 +
+ drivers/debug/lockup.c                        |  2 +-
+ .../common/chips/decoder_cpu_ver_info.c       |  2 +-
+ .../decoder/utils/vdec_power_ctrl.c           |  8 ++
+ sound/soc/amlogic/auge/pdm.c                  |  7 +-
+ 9 files changed, 99 insertions(+), 41 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi b/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
+index baed43910..1047121bb 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
++++ b/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
+@@ -396,8 +396,9 @@
+ 		status = "okay";
+ 		index = <0>;
+ 		key_valid = <0>;
+-		pinctrl-names = "pwm_on";
++		pinctrl-names = "pwm_on", "pwm_off";
+ 		pinctrl-0 = <&pwm_ao_c_pins2>;
++		pinctrl-1 = <&pwm_ao_c_pins2_sleep>;
+ 		pinctrl_version = <2>; /* for uboot */
+ 		interrupts = <0 197 1
+ 			0 194 1
+@@ -414,7 +415,7 @@
+ 			bl_level_attr = <255 1 /* level_max, level_min */
+ 				128 128>; /* level_mid, level_mid_mapping */
+ 			bl_ctrl_method = <1>; /* 1=pwm */
+-			bl_power_attr = <0 /* en_gpio_index */
++			bl_power_attr = <0xff /* no separate enable GPIO */
+ 				1 0 /* on_value, off_value */
+ 				200 200>; /* power_on_delay, power_off_delay */
+ 			bl_pwm_port = "PWM_AO_C";
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+index 7e1cc2701..de06da2df 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -34,6 +34,12 @@
+ 		serial0 = &uart_A;
+ 		serial1 = &uart_C;
+ 		serial3 = &uart_D;
++		tsensor0 = &a73_tsensor;
++		tsensor1 = &a53_tsensor;
++		tsensor2 = &gpu_tsensor;
++		tsensor3 = &nna_tsensor;
++		tsensor4 = &hevc_tsensor;
++		tsensor5 = &vpu_tsensor;
+ 	};
+ 
+ 	/* 3 GiB fitted; this is the accepted reservation window. */
+@@ -2250,3 +2256,16 @@
+ 	status = "okay";
+ 	memory-region = <&camera_cma_reserved>;
+ };
++
++/* Chiron carries the NNA thermal sensor described by the fitted board tree. */
++&nna_tsensor {
++	status = "okay";
++};
++
++/*
++ * This board has no wired Ethernet connector. Do not probe the generic T7C
++ * MDIO mux or defer forever on its unavailable ethrmii clock.
++ */
++&eth_phy {
++	status = "disabled";
++};
+diff --git a/arch/arm64/configs/chiron_defconfig b/arch/arm64/configs/chiron_defconfig
+index 03ffb12e6..692099ce0 100644
+--- a/arch/arm64/configs/chiron_defconfig
++++ b/arch/arm64/configs/chiron_defconfig
+@@ -6564,8 +6564,7 @@ CONFIG_QUOTA_TREE=y
+ # CONFIG_QFMT_V1 is not set
+ CONFIG_QFMT_V2=y
+ CONFIG_QUOTACTL=y
+-# CONFIG_AUTOFS4_FS is not set
+-# CONFIG_AUTOFS_FS is not set
++CONFIG_AUTOFS_FS=m
+ CONFIG_FUSE_FS=y
+ # CONFIG_CUSE is not set
+ # CONFIG_VIRTIO_FS is not set
+diff --git a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
+index bea2f89b0..eaf80d575 100644
+--- a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
++++ b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
+@@ -332,6 +332,8 @@ static int ov13b10_set_ctrl(struct v4l2_ctrl *ctrl)
+ 		break;
+ 	case V4L2_CID_AML_CSI_LANES:
+ 		break;
++	case V4L2_CID_AML_CLOCK_MODE:
++		break;
+ 	case V4L2_CID_AML_MODE:
+ 		ov13b10->enWDRMode = ctrl->val;
+ 		break;
+@@ -812,11 +814,23 @@ static struct v4l2_ctrl_config nlane_cfg = {
+ 	.def = 4,
+ };
+ 
++static struct v4l2_ctrl_config clock_mode_cfg = {
++	.ops = &ov13b10_ctrl_ops,
++	.id = V4L2_CID_AML_CLOCK_MODE,
++	.name = "CSI clock mode",
++	.type = V4L2_CTRL_TYPE_INTEGER,
++	.flags = V4L2_CTRL_FLAG_READ_ONLY,
++	.min = 0,
++	.max = 1,
++	.step = 1,
++	.def = 0,
++};
++
+ static int ov13b10_ctrls_init(struct ov13b10 *ov13b10)
+ {
+ 	int rtn = 0;
+ 
+-	v4l2_ctrl_handler_init(&ov13b10->ctrls, 7);
++	v4l2_ctrl_handler_init(&ov13b10->ctrls, 9);
+ 
+ 	v4l2_ctrl_new_std(&ov13b10->ctrls, &ov13b10_ctrl_ops,
+ 				V4L2_CID_GAIN, 0, 0xFFFF, 1, 0);
+@@ -848,6 +862,8 @@ static int ov13b10_ctrls_init(struct ov13b10 *ov13b10)
+ 
+ 	v4l2_ctrl_new_custom(&ov13b10->ctrls, &fps_cfg, NULL);
+ 
++	v4l2_ctrl_new_custom(&ov13b10->ctrls, &clock_mode_cfg, NULL);
++
+ 	ov13b10->sd.ctrl_handler = &ov13b10->ctrls;
+ 
+ 	if (ov13b10->ctrls.error) {
+@@ -971,44 +987,54 @@ int ov13b10_deinit(struct i2c_client *client)
+ 	return 0;
+ }
+ 
+-int ov13b10_sensor_id(struct i2c_client *client)
++static int ov13b10_read_sensor_id(struct i2c_client *client, u8 addr, u32 *id)
+ {
+-	u32 id = 0;
+-	u8 val = 0;
+-	int rtn = -EINVAL;
++	int ret;
++	u8 val;
+ 
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID1, 0x300a, &val);
+-	id |= (val << 16);
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID1, 0x300b, &val);
+-	id |= (val << 8);
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID1, 0x300c, &val);
+-	id |= val;
++	*id = 0;
++	ret = i2c_read_a16d8(client, addr, 0x300a, &val);
++	if (ret)
++		return ret;
++	*id = val << 16;
+ 
+-	if (id != OV13B10_ID && id != OV13B10_ID_2) {
+-		dev_info(&client->dev, "Failed to get ov13b10 id1: 0x%x\n", id);
+-		goto try_id;
+-	} else {
+-		dev_err(&client->dev, "success get ov13b10 id1 0x%x", id);
+-		client->addr = OV13B10_SLAVE_ID1;
++	ret = i2c_read_a16d8(client, addr, 0x300b, &val);
++	if (ret)
++		return ret;
++	*id |= val << 8;
++
++	ret = i2c_read_a16d8(client, addr, 0x300c, &val);
++	if (ret)
++		return ret;
++	*id |= val;
++
++	return 0;
++}
++
++int ov13b10_sensor_id(struct i2c_client *client)
++{
++	u32 id;
++
++	if (!ov13b10_read_sensor_id(client, OV13B10_SLAVE_ID, &id) &&
++	    (id == OV13B10_ID || id == OV13B10_ID_2 ||
++	     id == OV13B10_ID_CHIRON)) {
++		dev_info(&client->dev, "OV13B10 detected at 0x%02x, id 0x%x\n",
++			 OV13B10_SLAVE_ID, id);
++		client->addr = OV13B10_SLAVE_ID;
+ 		return 0;
+ 	}
++	dev_info(&client->dev, "OV13B10 ID mismatch at 0x%02x: 0x%x\n",
++		 OV13B10_SLAVE_ID, id);
+ 
+-try_id:
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID, 0x300a, &val);
+-	id |= (val << 16);
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID, 0x300b, &val);
+-	id |= (val << 8);
+-	i2c_read_a16d8(client, OV13B10_SLAVE_ID, 0x300c, &val);
+-	id |= val;
+-
+-	if (id != OV13B10_ID && id != OV13B10_ID_2) {
+-		dev_info(&client->dev, "Failed to get ov13b10 id: 0x%x\n", id);
+-		return rtn;
+-	} else {
+-		dev_err(&client->dev, "success get ov13b10 id 0x%x", id);
+-		client->addr = OV13B10_SLAVE_ID;
++	if (!ov13b10_read_sensor_id(client, OV13B10_SLAVE_ID1, &id) &&
++	    (id == OV13B10_ID || id == OV13B10_ID_2)) {
++		dev_info(&client->dev, "OV13B10 detected at 0x%02x, id 0x%x\n",
++			 OV13B10_SLAVE_ID1, id);
++		client->addr = OV13B10_SLAVE_ID1;
++
++		return 0;
+ 	}
+ 
+-	return 0;
++	dev_info(&client->dev, "Failed to detect OV13B10\n");
++	return -ENODEV;
+ }
+-
+diff --git a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.h b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.h
+index b8ac0dabf..1ac7f17f7 100644
+--- a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.h
++++ b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.h
+@@ -25,6 +25,8 @@
+ #define OV13B10_EXPOSURE_L   0x3502
+ #define OV13B10_ID           0x763d72
+ #define OV13B10_ID_2         0x763d73
++/* ID returned by the OV13B10 fitted to Chiron at its strapped 0x36 address. */
++#define OV13B10_ID_CHIRON    0x560d43
+ #define OV13B10_SLAVE_ID     0x0036
+ #define OV13B10_SLAVE_ID1    0x0010
+ 
+diff --git a/drivers/debug/lockup.c b/drivers/debug/lockup.c
+index ac9ae0fe9..bc95bf1e5 100644
+--- a/drivers/debug/lockup.c
++++ b/drivers/debug/lockup.c
+@@ -979,7 +979,7 @@ static void fiq_debug_addr_init(void)
+ 	 */
+ 	if (fiq_phy_addr == 0 || fiq_phy_addr == (phys_addr_t)-1 ||
+ 	    fiq_phy_addr == (phys_addr_t)(u32)-1) {
+-		WARN(1, "invalid fiq_phy_addr\n");
++		pr_warn_once("FIQ debug unsupported by firmware; disabled\n");
+ 		return;
+ 	}
+ 
+diff --git a/drivers/media_modules/common/chips/decoder_cpu_ver_info.c b/drivers/media_modules/common/chips/decoder_cpu_ver_info.c
+index 5a51650c1..657ea511b 100644
+--- a/drivers/media_modules/common/chips/decoder_cpu_ver_info.c
++++ b/drivers/media_modules/common/chips/decoder_cpu_ver_info.c
+@@ -787,7 +787,7 @@ struct platform_device *initial_dos_device(void)
+ 		(cpu_sub_id == CHIP_REVB))
+ 		cpu_ver_id = AM_MESON_CPU_MAJOR_ID_TL1;
+ 
+-	if (pdev && of_dev_data)
++	if (codec_dos_dev && pdev && of_dev_data)
+ 		dos_register_probe(pdev, of_dev_data->reg_compat);
+ 
+ 	pr_info("initial_dos_device end, chip %d(%d)\n",
+diff --git a/drivers/media_modules/frame_provider/decoder/utils/vdec_power_ctrl.c b/drivers/media_modules/frame_provider/decoder/utils/vdec_power_ctrl.c
+index 84c448e1d..e071ce7b7 100644
+--- a/drivers/media_modules/frame_provider/decoder/utils/vdec_power_ctrl.c
++++ b/drivers/media_modules/frame_provider/decoder/utils/vdec_power_ctrl.c
+@@ -108,6 +108,10 @@ static int pm_vdec_power_domain_init(struct device *dev)
+ 	struct pm_pd_s *pd = pm->pd_data;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(pm_domain_data); i++) {
++		if (of_property_match_string(dev->of_node, "power-domain-names",
++					     pd[i].name) < 0)
++			continue;
++
+ 		pd[i].dev = dev_pm_domain_attach_by_name(dev, pd[i].name);
+ 		if (IS_ERR_OR_NULL(pd[i].dev)) {
+ 			err = PTR_ERR(pd[i].dev);
+@@ -302,6 +306,10 @@ static void pm_vdec_power_domain_power_off(struct device *dev, int id)
+ static bool pm_vdec_power_domain_power_state(struct device *dev, int id)
+ {
+ 	const struct power_manager_s *pm = of_device_get_match_data(dev);
++	if (id < 0 || id >= ARRAY_SIZE(pm_domain_data) ||
++	    IS_ERR_OR_NULL(pm->pd_data[id].dev))
++		return false;
++
+ 
+ 	if ((get_cpu_major_id() == AM_MESON_CPU_MAJOR_ID_T5M) &&
+ 		((id == VDEC_1) || (id == VDEC_HCODEC))) {
+diff --git a/sound/soc/amlogic/auge/pdm.c b/sound/soc/amlogic/auge/pdm.c
+index 25cb40df8..bf77150d8 100644
+--- a/sound/soc/amlogic/auge/pdm.c
++++ b/sound/soc/amlogic/auge/pdm.c
+@@ -957,6 +957,7 @@ void aml_pdm_dai_shutdown(struct snd_pcm_substream *substream,
+ 	struct snd_soc_dai *cpu_dai)
+ {
+ 	struct aml_pdm *p_pdm = snd_soc_dai_get_drvdata(cpu_dai);
++	bool clocks_on = p_pdm->clk_on;
+ 	int id = p_pdm->chipinfo->id;
+ 	p_pdm->clk_on = false;
+ 	p_pdm->rate = 0;
+@@ -967,8 +968,10 @@ void aml_pdm_dai_shutdown(struct snd_pcm_substream *substream,
+ 	}
+ 
+ 	/* disable clock and gate */
+-	clk_disable_unprepare(p_pdm->clk_pdm_dclk);
+-	clk_disable_unprepare(p_pdm->clk_pdm_sysclk);
++	if (clocks_on) {
++		clk_disable_unprepare(p_pdm->clk_pdm_dclk);
++		clk_disable_unprepare(p_pdm->clk_pdm_sysclk);
++	}
+ 	clk_disable_unprepare(p_pdm->clk_gate);
+ }
+ 
+

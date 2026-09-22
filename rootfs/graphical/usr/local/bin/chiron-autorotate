@@ -1,0 +1,183 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Rotate the display to follow the hinge. Wayland port of the X11 script.
+#
+# The panel is fixed on a hinge with exactly two detents -- 0 degrees, portrait
+# and 1200 wide, and -90 degrees, landscape and 1920 wide -- and in each of them
+# it can lean about a second axis that carries no information.
+#
+# iio-sensor-proxy cannot drive this, and that is structural rather than a
+# number to tune. Its heuristic is written for a device held in the hand:
+#
+#     /* Don't change orientation if we are on the common border of two thresholds */
+#     if (abs(portrait_rotation) > THRESHOLD_PORTRAIT &&
+#         abs(landscape_rotation) > THRESHOLD_LANDSCAPE)
+#             return prev;
+#
+# Measured on this panel at the -90 detent: portrait 52.1 degrees and landscape
+# -37.5 degrees, both past the fixed 35-degree threshold, so it returns the
+# previous orientation and the screen stays portrait. (On this image the daemon
+# does not even get that far -- the sc7a20e driver exposes no buffer and no
+# scan_elements, only raw registers, so iio-sensor-proxy reports "No sensors or
+# missing kernel drivers" and exits.)
+#
+# So the decision is made here, on the one quantity the lean cannot move: the
+# sensor's X component alone.
+#
+#     0 detent    x = -0.040, -0.040, -0.034      ->  transform normal
+#     -90 detent  x = +0.947, +0.768, +0.464      ->  transform 90
+#
+# At the 0 detent sensor X lies horizontal, square to gravity, so leaning the
+# panel leaves it at zero. At the -90 detent X points along up-and-down and
+# keeps most of gravity even when the panel is well off square. The two sets are
+# separated by half a g, which is what makes a plain threshold enough.
+#
+# Comparing |x| against |y| was tried first and is wrong: at the -90 detent the
+# lean is rotation *in the plane of the screen* -- z steady at 0.07 while x and
+# y traded about 50 degrees -- and that is exactly the motion which swaps which
+# of the two is larger. It flapped. Only two detents exist, so Y is not needed.
+#
+# What the Wayland port drops relative to the X11 original:
+#   - the touchscreen mapping. wlroots maps a touch device to its output and
+#     applies the output transform to the coordinates, so rotating the output
+#     rotates touch with it. The X11 `xinput map-to-output` step has no analogue
+#     and needs none.
+#   - `--reflect x` and `--scale 0.7`, neither of which this panel wants.
+
+set -u
+
+[ -r /etc/default/chiron-autorotate ] && . /etc/default/chiron-autorotate
+
+OUTPUT=${OUTPUT:-DSI-1}
+POLL=${POLL:-1}
+# Wayland output transforms for the two detents. 270, not 90: measured on this
+# panel, 90 puts the landscape image upside down.
+TRANSFORM_FLAT=${TRANSFORM_FLAT:-normal}
+TRANSFORM_TILTED=${TRANSFORM_TILTED:-270}
+# g. Laid flat, gravity is almost all on Z and the screen plane says nothing.
+# This is compared against the in-plane magnitude sqrt(gx^2 + gy^2), NOT against
+# |gx|: at the portrait detent gx is about -0.04, so a floor on |gx| would swallow
+# the portrait case entirely and the panel could never rotate back.
+FLOOR=${FLOOR:-0.15}
+# g. Schmitt trigger on the *signed* X component: above X_ON the panel is at the
+# -90 detent, below X_OFF it is at 0, and in between the current rotation is kept
+# so the picture cannot flap. Measured values sit at -0.04 and +0.46 or higher,
+# so the band is wide. Signed, not absolute -- the two detents are distinguished
+# by which way X points, and taking the magnitude throws that away.
+X_ON=${X_ON:-0.30}
+X_OFF=${X_OFF:-0.20}
+
+log() { printf '[autorotate] %s\n' "$*"; }
+
+# The wallpaper follows the hinge, because one picture cannot: the screen is
+# 1200x1920 at one detent and 1920x1200 at the other, and an image drawn for
+# either is cropped or stretched in the other. A square master cropped to fill
+# was tried and works, but it spends most of the picture on the crop.
+#
+# This is the place for it and not a separate watcher, because this is the one
+# thing in the image that already knows the screen has turned. pcmanfm-qt takes
+# the new wallpaper as a command-line option and hands it to the running
+# instance, so there is no config file to rewrite and nothing to restart.
+#
+# Run as the session user rather than as root, which this service is: the
+# desktop is that user's process and its single-instance handoff goes over
+# their bus. The user is whoever owns the runtime directory the unit was
+# pointed at, so this needs no second copy of the account name.
+WALLPAPER_DIR=${WALLPAPER_DIR:-/usr/local/share/chiron}
+WALLPAPER_MODE=${WALLPAPER_MODE:-zoom}
+
+set_wallpaper() {
+    image="$WALLPAPER_DIR/wallpaper-$1.png"
+    [ -r "$image" ] || return 0
+    session_user=$(stat -c %U "$XDG_RUNTIME_DIR" 2>/dev/null) || return 0
+    [ -n "$session_user" ] && [ "$session_user" != UNKNOWN ] || return 0
+    runuser -u "$session_user" -- env \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus" \
+        QT_QPA_PLATFORM=wayland \
+        pcmanfm-qt --set-wallpaper "$image" \
+                   --wallpaper-mode "$WALLPAPER_MODE" >/dev/null 2>&1 \
+        && log "wallpaper $1"
+}
+
+find_sensor() {
+    for dev in /sys/bus/iio/devices/iio:device*; do
+        [ -r "$dev/name" ] || continue
+        if [ "$(cat "$dev/name")" = sc7a20e ]; then
+            echo "$dev"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# The compositor is started by greetd and this is a system service, so the
+# socket may not exist yet -- and it is replaced on every session restart.
+wait_for_compositor() {
+    i=0
+    while [ "$i" -lt 300 ]; do
+        if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] \
+            && wlr-randr >/dev/null 2>&1; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    return 1
+}
+
+SENSOR=$(find_sensor) || { log "no sc7a20e in /sys/bus/iio/devices"; exit 1; }
+SCALE_G=$(cat "$SENSOR/in_accel_scale")
+log "sensor $SENSOR scale=$SCALE_G output=$OUTPUT"
+
+wait_for_compositor || { log "no compositor on $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; exit 1; }
+
+decide() {
+    previous=$1
+    x=$(cat "$SENSOR/in_accel_x_raw" 2>/dev/null) || return
+    y=$(cat "$SENSOR/in_accel_y_raw" 2>/dev/null) || return
+
+    awk -v x="$x" -v y="$y" -v s="$SCALE_G" -v prev="$previous" \
+        -v floor="$FLOOR" -v on="$X_ON" -v off="$X_OFF" \
+        -v tilted="$TRANSFORM_TILTED" -v flat="$TRANSFORM_FLAT" '
+        BEGIN {
+            # IIO reports m/s^2; g is the natural unit for deciding which way
+            # is down.
+            gx = x * s / 9.80665
+            gy = y * s / 9.80665
+
+            # Laid flat, gravity is almost all on Z and the screen plane says
+            # nothing. Keep whatever is on screen.
+            if (sqrt(gx * gx + gy * gy) < floor) { print prev; exit }
+
+            if (gx > on)  { print tilted; exit }
+            if (gx < off) { print flat;   exit }
+            print prev
+        }'
+}
+
+current=
+while :; do
+    want=$(decide "$current")
+
+    if [ -n "$want" ] && [ "$want" != "$current" ]; then
+        if wlr-randr --output "$OUTPUT" --transform "$want" >/dev/null 2>&1; then
+            log "transform $want"
+            current=$want
+            # After the transform, not before: the desktop is told what to
+            # draw once the surface it draws on is the new shape.
+            if [ "$want" = "$TRANSFORM_FLAT" ]; then
+                set_wallpaper portrait
+            else
+                set_wallpaper landscape
+            fi
+        else
+            # The session went away; wait for the next one rather than spinning.
+            wait_for_compositor || exit 1
+            current=
+        fi
+    fi
+    sleep "$POLL"
+done

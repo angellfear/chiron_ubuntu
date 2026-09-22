@@ -1,0 +1,258 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Collect crash evidence into crash_dump_<date>_<time>.tar.gz on the desktop.
+#
+# Two callers, one file:
+#
+#   chiron-evidence --boot    the chiron-evidence.service unit, after every
+#                             boot. A kernel panic leaves a dmesg-* record in
+#                             ramoops; systemd-pstore moves it (and the
+#                             console/pmsg records beside it) to
+#                             /var/lib/systemd/pstore, and this archives every
+#                             record it has not seen before -- but only when a
+#                             dmesg-* record is among them, because nothing
+#                             except a panic writes one. Console and pmsg
+#                             records also appear when another kernel hands the
+#                             ramoops region over -- every Android boot before
+#                             an Ubuntu deploy leaves its console there -- so
+#                             on their own they are stamped as seen and no
+#                             archive is made, or a deploy would bury the real
+#                             dump under Android console logs.
+#
+#   chiron-evidence --manual  the "Собрать логи" desktop shortcut, through the
+#                             passwordless grant in sudoers.d/50-chiron-
+#                             evidence. The same evidence set plus the current
+#                             log and journal, onto the Desktop of the account
+#                             that tapped the shortcut (SUDO_USER), for the
+#                             "something is wrong right now" moment that no
+#                             daemon saw. A hang ended by a hardware reset
+#                             leaves no dmesg record; this is the path that
+#                             still hands over the console log.
+#
+# "Seen before" is a stamp file of "<sha256>  <name>" lines under
+# /var/lib/chiron-evidence, not the journal: this board has no RTC, the clock
+# steps early in boot, and the persistent journal is created mid-boot -- a
+# journal query that answered at one moment answered nothing a moment later,
+# observed on a real deploy. The stamp lives in the writable overlay, so a
+# reseeded overlay (every deploy) re-learns from scratch, which is correct:
+# the reseed also wiped the pstore archive directory it describes. Records
+# are stamped by content, not name: ramoops reuses names, and the second
+# crash would otherwise look like the first one already archived.
+#
+# The stamp in the archive name comes from the saved clock until NTP corrects
+# it; the unit is ordered after time-set.target for exactly that. The stamp
+# is never evidence: metadata.txt carries the uptime and both clocks.
+
+set -eu
+
+PSTORE_DIR=/var/lib/systemd/pstore
+STAMP_DIR=/var/lib/chiron-evidence
+STAMP_FILE=$STAMP_DIR/pstore-records
+
+log() { printf '[evidence] %s\n' "$*" >&2; }
+
+[ "$(id -u)" = 0 ] || { echo "must run as root" >&2; exit 2; }
+
+# The account whose desktop the boot-time archive lands on. The released
+# image creates it in chiron-firstboot from /etc/default/chiron-firstboot, and
+# an integrator may have edited that name before the first boot, so it is read
+# back rather than assumed. No such account -- a boot before firstboot ran --
+# means root.
+desktop_account() {
+    name=$(sed -n 's/^USERNAME=//p' /etc/default/chiron-firstboot 2>/dev/null | tail -n 1)
+    if [ -n "$name" ] && id "$name" >/dev/null 2>&1; then
+        printf '%s' "$name"
+    else
+        printf root
+    fi
+}
+
+# $1: account name. Its Desktop, created if missing; root's, as the fallback
+# for a profile that has no desktop account to receive the archive.
+desktop_dir() {
+    user=$1
+    if [ "$user" != root ]; then
+        home=$(getent passwd "$user" | cut -d: -f6)
+        if [ -n "$home" ] && [ -d "$home" ]; then
+            install -d -m 755 -o "$user" -g "$(id -gn "$user")" "$home/Desktop"
+            printf '%s' "$home/Desktop"
+            return
+        fi
+    fi
+    install -d -m 755 /root/Desktop
+    printf '%s' /root/Desktop
+}
+
+# $1: pstore record name. Its stamp line, in sha256sum's own format so the
+# stamp is nothing more than saved checksum output.
+record_line() {
+    (cd "$PSTORE_DIR" && sha256sum "$1") 2>/dev/null
+}
+
+# One stamp line per record this run has never seen, whatever it is.
+new_record_lines() {
+    for name in $(ls -1 "$PSTORE_DIR" 2>/dev/null); do
+        [ -f "$PSTORE_DIR/$name" ] || continue
+        line=$(record_line "$name") || continue
+        grep -qxF "$line" "$STAMP_FILE" 2>/dev/null || printf '%s\n' "$line"
+    done
+}
+
+# $1: staging directory, $2...: pstore files to include. Everything that can
+# fail without making the archive worthless is allowed to fail quietly: an
+# archive with two of five sections still goes to the desktop.
+write_evidence() {
+    stage=$1
+    shift
+    mkdir -p "$stage/pstore"
+
+    {
+        printf 'collected: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %z')"
+        printf 'uptime: %s\n' "$(uptime -p 2>/dev/null || cat /proc/uptime)"
+        printf 'kernel: %s\n' "$(uname -a)"
+        printf 'cmdline: %s\n' "$(cat /proc/cmdline 2>/dev/null)"
+        printf 'os: %s\n' "$(. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-unknown}")"
+        printf 'boot id: %s\n' "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+        printf 'kernel.panic: %s\n' "$(cat /proc/sys/kernel/panic 2>/dev/null)"
+        printf 'kernel.panic_on_oops: %s\n' "$(cat /proc/sys/kernel/panic_on_oops 2>/dev/null)"
+    } >"$stage/metadata.txt"
+
+    {
+        printf '%s\n' '-- recent boots --'
+        journalctl --no-pager --list-boots 2>/dev/null | tail -n 8 || true
+        # Informational only. This same query has been observed to answer
+        # at one point of a boot and not at another (volatile journal,
+        # clock step); the stamp file is what decides, not this.
+        printf '%s\n' '-- systemd-pstore moves it logged this boot --'
+        journalctl -q --no-pager --output=cat -b 0 -u systemd-pstore.service 2>/dev/null \
+            | grep 'moved to' || true
+        printf '%s\n' '-- pstore archive directory --'
+        ls -la "$PSTORE_DIR" 2>/dev/null || true
+        printf '%s\n' '-- thermal zones --'
+        for z in /sys/class/thermal/thermal_zone*; do
+            [ -r "$z/type" ] || continue
+            printf '%s %s\n' "$(cat "$z/type")" "$(cat "$z/temp" 2>/dev/null)"
+        done
+        printf '%s\n' '-- memory --'
+        free -m 2>/dev/null || true
+        printf '%s\n' '-- storage --'
+        df -h / /home 2>/dev/null || true
+    } >>"$stage/metadata.txt"
+
+    dmesg >"$stage/current-dmesg.txt" 2>/dev/null \
+        || printf -- '-- dmesg unavailable --\n' >"$stage/current-dmesg.txt"
+
+    # The loaded modules with their addresses. A dump whose PC lands in a
+    # module can only be resolved against this list, and after the fact it
+    # cannot be reconstructed -- a later boot loads them elsewhere.
+    cat /proc/modules >"$stage/modules.txt" 2>/dev/null || true
+
+    # sysstat samples this board every ten minutes; these files are the only
+    # record of what it was doing in the hours and days before the crash.
+    if [ -d /var/log/sysstat ]; then
+        mkdir -p "$stage/sysstat"
+        cp -p /var/log/sysstat/* "$stage/sysstat/" 2>/dev/null || true
+    fi
+
+    for boot in previous current; do
+        idx=-1
+        [ "$boot" = current ] && idx=0
+        journalctl --no-pager -b "$idx" >"$stage/$boot-boot-journal.txt" 2>/dev/null \
+            || printf -- '-- journal of this boot is unavailable --\n' \
+                >"$stage/$boot-boot-journal.txt"
+    done
+
+    for file in "$@"; do
+        [ -f "$file" ] || continue
+        cp -p "$file" "$stage/pstore/"
+        printf 'pstore/%s  %s\n' \
+            "$(basename "$file")" \
+            "$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)" \
+            >>"$stage/metadata.txt"
+    done
+}
+
+# $1: staging directory (its basename is both the top-level directory of the
+# archive and the name of the tarball -- one stamp, taken when collection
+# starts, so the two can never disagree), $2: output directory, $3: account
+# to own the archive. Prints the archive path -- the only stdout this script
+# ever produces, which is what the desktop half turns into its notification.
+pack_archive() {
+    stage=$1
+    outdir=$2
+    owner=$3
+    archive="$outdir/$(basename "$stage").tar.gz"
+    tar -C "$(dirname "$stage")" -czf "$archive" "$(basename "$stage")"
+    chmod 0644 "$archive"
+    if [ "$owner" != root ]; then
+        chown "$owner:$(id -gn "$owner")" "$archive" 2>/dev/null || true
+    fi
+    printf '%s\n' "$archive"
+}
+
+# $1: stamp lines to remember, one per line.
+stamp_remember() {
+    [ -n "$1" ] || return 0
+    printf '%s\n' "$1" >>"$STAMP_FILE"
+}
+
+mode=${1:-}
+case $mode in
+--boot)
+    install -d "$STAMP_DIR"
+    new=$(new_record_lines)
+    [ -n "$new" ] || {
+        log "no new pstore records; nothing to do"
+        exit 0
+    }
+    names=$(printf '%s\n' "$new" | sed -n 's/^[0-9a-f]*  //p')
+
+    panics=$(printf '%s\n' "$names" | grep -c '^dmesg-' || true)
+    if [ "$panics" = 0 ]; then
+        stamp_remember "$new"
+        log "only console/pmsg records arrived (no dmesg record, no panic); stamped as seen, no archive"
+        exit 0
+    fi
+
+    files=
+    for name in $names; do
+        [ -f "$PSTORE_DIR/$name" ] && files="$files $PSTORE_DIR/$name"
+    done
+    [ -n "$files" ] || {
+        log "records vanished from $PSTORE_DIR before packing; not stamping"
+        exit 1
+    }
+
+    user=$(desktop_account)
+    parent=$(mktemp -d /tmp/chiron-evidence.XXXXXX)
+    trap 'rm -rf "$parent"' EXIT INT TERM
+    stage=$parent/crash_dump_$(date +%Y-%m-%d_%H-%M-%S)
+    mkdir -m 700 "$stage"
+    # shellcheck disable=SC2086
+    write_evidence "$stage" $files
+    archive=$(pack_archive "$stage" "$(desktop_dir "$user")" "$user")
+    stamp_remember "$new"
+    log "wrote $archive"
+    printf '%s\n' "$archive"
+    ;;
+--manual)
+    user=${SUDO_USER:-root}
+    parent=$(mktemp -d /tmp/chiron-evidence.XXXXXX)
+    trap 'rm -rf "$parent"' EXIT INT TERM
+    stage=$parent/crash_dump_$(date +%Y-%m-%d_%H-%M-%S)
+    mkdir -m 700 "$stage"
+    # Manual collection packs the whole archive directory, older records
+    # included: they were evidence of something once, and a person asking for
+    # logs by hand is the moment to hand over everything there is.
+    # shellcheck disable=SC2086
+    write_evidence "$stage" $(find "$PSTORE_DIR" -maxdepth 1 -type f 2>/dev/null || true)
+    archive=$(pack_archive "$stage" "$(desktop_dir "$user")" "$user")
+    log "wrote $archive"
+    printf '%s\n' "$archive"
+    ;;
+*)
+    echo "usage: $0 {--boot|--manual}" >&2
+    exit 2
+    ;;
+esac

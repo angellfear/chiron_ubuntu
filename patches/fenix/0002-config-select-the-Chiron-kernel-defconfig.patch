@@ -1,0 +1,25 @@
+From e6973bb9d8b6b32fe64f50e4ee96b6d6c7cc5888 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 00:05:33 +0000
+Subject: [PATCH 2/2] config: select the Chiron kernel defconfig
+
+---
+ config/boards/Chiron.conf | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/config/boards/Chiron.conf b/config/boards/Chiron.conf
+index 492029fd..e08136df 100644
+--- a/config/boards/Chiron.conf
++++ b/config/boards/Chiron.conf
+@@ -9,3 +9,8 @@ case "$LINUX" in
+ 		LINUX_DTB="$LINUX_COMMON_DRIVERS_DIR/arch/arm64/boot/dts/amlogic/chiron.dtb"
+ 		;;
+ esac
++
++# Khadas ships kvims_defconfig with debug instrumentation (KASAN/KFENCE/
++# UBSAN/...) that corrupts memory on A311D2; chiron_defconfig is the
++# production config for this board.
++LINUX_DEFCONFIG="chiron_defconfig"
+-- 
+2.43.0
+

@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 43/44] media: amlcam: give each camera video node a stable
+ minor number
+
+Registering every node with VIDEO_NODE -1 let the kernel hand out
+whatever minor was free, so /dev/videoN moved between boots and userspace
+could not address a specific stream. Derive the minor from the stream id.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlcam/cam_common/aml_misc.h  | 4 +++-
+ drivers/amlisp/amlcam/cam_common/aml_video.c | 4 ++--
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/amlisp/amlcam/cam_common/aml_misc.h b/drivers/amlisp/amlcam/cam_common/aml_misc.h
+index a7edcf52e..a03d99da4 100644
+--- a/drivers/amlisp/amlcam/cam_common/aml_misc.h
++++ b/drivers/amlisp/amlcam/cam_common/aml_misc.h
+@@ -27,9 +27,11 @@
+ #else
+ #define VIDEO_NODE    60
+ #endif
++#define VIDEO_NODE_ID(id) (27 + (id))
+ 
+ #else
+-#define VIDEO_NODE    -1
++#define VIDEO_NODE    27
++#define VIDEO_NODE_ID(id) (VIDEO_NODE + (id))
+ #endif
+ 
+ #define V4L2_CID_AML_BASE            (V4L2_CID_BASE + 0x1000)
+diff --git a/drivers/amlisp/amlcam/cam_common/aml_video.c b/drivers/amlisp/amlcam/cam_common/aml_video.c
+index 55a753e2d..21ded34c1 100644
+--- a/drivers/amlisp/amlcam/cam_common/aml_video.c
++++ b/drivers/amlisp/amlcam/cam_common/aml_video.c
+@@ -879,9 +879,9 @@ int aml_video_register(struct aml_video *video)
+ 	vdev->lock = &video->lock;
+ 	strncpy(vdev->name, video->name, strlen(video->name));
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
+-	rtn = video_register_device(vdev, VFL_TYPE_VIDEO, VIDEO_NODE);
++	rtn = video_register_device(vdev, VFL_TYPE_VIDEO, VIDEO_NODE_ID(video->id));
+ #else
+-	rtn = video_register_device(vdev, VFL_TYPE_GRABBER, VIDEO_NODE);
++	rtn = video_register_device(vdev, VFL_TYPE_GRABBER, VIDEO_NODE_ID(video->id));
+ #endif
+ 	if (rtn < 0) {
+ 		dev_err(video->dev, "Failed to register video device: %d\n", rtn);

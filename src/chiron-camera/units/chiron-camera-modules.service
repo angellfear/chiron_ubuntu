@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load Chiron OV13B10 camera modules
+After=chiron-codec-load.service
+Wants=chiron-codec-load.service
+Before=chiron-camera.service chiron-camera-bridge.service chiron-camera-privacy.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/load-chiron-camera.sh
+TimeoutStartSec=30
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

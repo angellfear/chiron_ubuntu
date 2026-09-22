@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Keep a polkit authentication agent in the session.
+#
+# Wayfire's autostart launches a process and does not bring it back if it dies,
+# and an agent that is not running is not a degraded session but a broken one:
+# with nobody for polkit to ask, every privileged action fails the moment it is
+# asked, with no prompt at all. That reads as "permission denied" for joining
+# Wi-Fi or setting the timezone and gives no hint why. The agent this image
+# used to carry made that concrete by faulting every time it had to draw its
+# dialog; see profiles/graphical/packages.list.
+#
+# So the agent is supervised rather than launched. The pause keeps a binary
+# that cannot start at all from spinning.
+set -eu
+
+agent=/usr/bin/lxpolkit
+
+while :; do
+    "$agent" || true
+    sleep 2
+done

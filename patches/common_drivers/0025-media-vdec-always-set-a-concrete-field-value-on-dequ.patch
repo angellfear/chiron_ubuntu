@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 25/44] media: vdec: always set a concrete field value on
+ dequeue
+
+Validated on this board.
+---
+ .../media_modules/amvdec_ports/aml_vcodec_dec.c  | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index 4b16010b3..7be6faa9e 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -994,6 +994,8 @@ ssize_t dump_cma_and_sys_memsize(struct aml_vcodec_ctx *ctx, char *buf)
+ 	vb2_buf->timestamp = vf->timestamp;
+ 	dstbuf->vb.flags |= vf->frame_type;
+ 
++	/* Every dequeued progressive frame must carry a concrete field value. */
++	vb->field = V4L2_FIELD_NONE;
+ 	if ((ctx->picinfo.field == V4L2_FIELD_INTERLACED) && (!ctx->vpp_is_need)) {
+ 		vb->field = V4L2_FIELD_INTERLACED;
+ 	}
+@@ -5344,6 +5346,20 @@ static int vidioc_vdec_g_parm(struct file *file, void *fh,
+ 	if (!V4L2_TYPE_IS_MULTIPLANAR(a->type) && dst_vq->is_multiplanar)
+ 		return -EINVAL;
+ 
++	/*
++	 * GStreamer expects a valid fraction from a successful capture G_PARM.
++	 * Prefer the vendor 96 kHz duration when userspace supplied one; generic
++	 * clients leave it zero, so give them a conservative nominal rate. Frame
++	 * timestamps remain authoritative for variable-rate streams.
++	 */
++	if (!V4L2_TYPE_IS_OUTPUT(a->type)) {
++		a->parm.capture.timeperframe.numerator =
++			ctx->config.parm.dec.cfg.duration ?: 1;
++		a->parm.capture.timeperframe.denominator =
++			ctx->config.parm.dec.cfg.duration ? 96000 : 30;
++		return 0;
++	}
++
+ 	if ((a->type == V4L2_BUF_TYPE_VIDEO_OUTPUT) || (a->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)) {
+ 		if (vdec_if_get_param(ctx, GET_PARAM_CONFIG_INFO, &ctx->config.parm.dec))
+ 			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,

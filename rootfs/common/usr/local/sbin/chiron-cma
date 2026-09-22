@@ -1,0 +1,48 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Let the page cache use the CMA pools.
+#
+# The board reserves 1624 MiB of CMA -- codec_mm 432, adla 384, isp 324,
+# camera 272, ion-dev 152, ion-fb 28, adapt 24, plus the generic 8 -- and every
+# one of those pools is "reusable", so movable pages are allowed to live in
+# them until a device actually claims the memory. The vendor aml_cma driver
+# nevertheless refuses that: can_use_cma() returns false while its cma_enabled
+# parameter is 0, and cma_enabled_work_fn() only sets it once free swap has
+# fallen below cma_enabled_swap_ratio (70) percent of total.
+#
+# On this appliance that moment never arrives. The board therefore ran on
+# "Memory: 1265072K/3137536K available ... 1662976K cma-reserved" -- 1.2 GiB of
+# 3.1 GiB -- while 1.6 GiB sat idle, which is what drove the squashfs page
+# cache thrashing. Measured with this knob set by hand: reading 700 MiB through
+# the loop device took CmaFree from 1638248 kB to 1311260 kB, i.e. the cache
+# moved into the pools, with no allocation warning and no SError.
+#
+# The reason it is safe to do this here is the reserved-memory layout, which
+# was carried over from the hardware-accepted board tree: linux,secmon
+# is a plain reservation ("map non-reusable" in the boot log), not a
+# shared-dma-pool. Handing secure-monitor memory to CMA is what previously
+# returned foreign data from buffered reads and panicked the CPU with an
+# asynchronous SError. Do not make secmon reusable and leave this enabled.
+#
+# The kernel command line would be the earlier place for this
+# (aml_cma.c has __setup("cma_enabled=")), but the command line comes from the
+# Android-side menu.lst written at deploy time, which is not part of this
+# image; a unit is the reproducible option.
+set -eu
+
+knob=/sys/module/aml_cma/parameters/cma_enabled
+[ -w "$knob" ] || {
+    echo "[chiron-cma] $knob is missing; is CONFIG_AMLOGIC_CMA still set?" >&2
+    exit 1
+}
+
+echo 1 > "$knob"
+read -r active < "$knob"
+[ "$active" = 1 ] || {
+    echo "[chiron-cma] knob stayed at $active" >&2
+    exit 1
+}
+
+total=$(awk '/^CmaTotal:/ {print $2}' /proc/meminfo)
+echo "[chiron-cma] page cache may now use the ${total} kB of CMA"

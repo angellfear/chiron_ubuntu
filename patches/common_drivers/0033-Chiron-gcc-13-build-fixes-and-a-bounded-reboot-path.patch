@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 18:45:19 +0000
+Subject: [PATCH 33/44] Chiron: gcc 13 build fixes and a bounded reboot path
+
+These files are not touched elsewhere in this queue: an older toolchain
+does not report these two headers, and the reboot path here
+needs the same bounded teardown the DRM shutdown patches give the display.
+
+(cherry picked from commit 4a2dbfdd638d6f8227d2f8c4f5e487e2ae246d12)
+---
+ drivers/media/enhancement/amvecm/set_hdr2_v0.h |  4 ++--
+ drivers/media/enhancement/amvecm/vlock.h       |  2 +-
+ drivers/pm/reboot.c                            | 14 ++++++++++++--
+ 3 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/enhancement/amvecm/set_hdr2_v0.h b/drivers/media/enhancement/amvecm/set_hdr2_v0.h
+index 01a3df79b..a50cfa820 100644
+--- a/drivers/media/enhancement/amvecm/set_hdr2_v0.h
++++ b/drivers/media/enhancement/amvecm/set_hdr2_v0.h
+@@ -81,7 +81,7 @@ enum hdr_hist_sel {
+ #define OO_NOR			(OO_BITS - OO_GAIN_SHIFT)
+ 
+ enum hdr_process_sel hdr_func(enum hdr_module_sel module_sel,
+-			      u32 hdr_process_select,
++			      enum hdr_process_sel hdr_process_select,
+ 			      struct vinfo_s *vinfo,
+ 			      struct matrix_s *gmt_mtx,
+ 			      enum vpp_index_e vpp_index);
+@@ -122,7 +122,7 @@ int hdr10p_ebzcurve_update(enum hdr_module_sel module_sel,
+ 			   struct hdr10pgen_param_s *hdr10pgen_param,
+ 			   enum vpp_index_e vpp_index);
+ enum hdr_process_sel hdr10p_func(enum hdr_module_sel module_sel,
+-				 u32 hdr_process_select,
++				 enum hdr_process_sel hdr_process_select,
+ 				 struct vinfo_s *vinfo,
+ 				 struct matrix_s *gmt_mtx,
+ 				 enum vpp_index_e vpp_index);
+diff --git a/drivers/media/enhancement/amvecm/vlock.h b/drivers/media/enhancement/amvecm/vlock.h
+index 4eed5214b..72c9d556a 100644
+--- a/drivers/media/enhancement/amvecm/vlock.h
++++ b/drivers/media/enhancement/amvecm/vlock.h
+@@ -320,7 +320,7 @@ enum vlock_pll_sel {
+ #define ENCL_FRC_CTRL_T3X                    0x14D9
+ 
+ /* 0:enc;1:pll;2:manual pll */
+-extern unsigned int vlock_mode;
++extern enum VLOCK_MD vlock_mode;
+ extern unsigned int vlock_en;
+ extern unsigned int vecm_latch_flag;
+ /*extern void __iomem *amvecm_hiu_reg_base;*/
+diff --git a/drivers/pm/reboot.c b/drivers/pm/reboot.c
+index 751099ca4..11b46a75d 100644
+--- a/drivers/pm/reboot.c
++++ b/drivers/pm/reboot.c
+@@ -399,6 +399,7 @@ static struct notifier_block aml_restart_nb = {
+ 
+ static int aml_restart_probe(struct platform_device *pdev)
+ {
++	struct resource *res;
+ 	u32 id;
+ 	int ret;
+ 
+@@ -418,8 +419,17 @@ static int aml_restart_probe(struct platform_device *pdev)
+ 		pm_power_off = do_aml_poweroff;
+ 	}
+ 
+-	reboot_reason_vaddr = devm_platform_ioremap_resource(pdev, 0);
+-	if (!IS_ERR(reboot_reason_vaddr)) {
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (res) {
++		reboot_reason_vaddr = devm_ioremap_resource(&pdev->dev, res);
++		if (IS_ERR(reboot_reason_vaddr)) {
++			dev_warn(&pdev->dev,
++				 "failed to map optional reboot-reason register\n");
++			reboot_reason_vaddr = NULL;
++		}
++	}
++
++	if (reboot_reason_vaddr) {
+ 	#ifndef CONFIG_AMLOGIC_ZAPPER_CUT
+ 		ret = device_create_file(&pdev->dev, &dev_attr_reboot_reason);
+ 		if (ret != 0)

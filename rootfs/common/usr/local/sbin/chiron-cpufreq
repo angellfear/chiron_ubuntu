@@ -1,0 +1,35 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Put every CPU frequency policy on the performance governor.
+#
+# This board offers exactly two governors -- performance and schedutil -- and
+# boots on schedutil. The packaged way to pick one at boot, cpupower-gui.service,
+# cannot work here: `cpupower-gui config` still builds its GTK window, so from
+# multi-user.target it dies on "cannot open display", and even with a display it
+# applies nothing, because /etc/cpupower_gui.conf names the Balanced profile and
+# cpupower-gui only generates that profile when powersave or ondemand exists.
+# cpupower-gui itself stays installed and is started from the application menu
+# to change the governor by hand; this only sets the state the board boots into.
+set -eu
+
+applied=0
+for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    governor="$policy/scaling_governor"
+    [ -w "$governor" ] || continue
+    echo performance > "$governor"
+    read -r active < "$governor"
+    [ "$active" = performance ] || {
+        echo "[chiron-cpufreq] ${policy##*/} stayed on $active" >&2
+        exit 1
+    }
+    applied=$((applied + 1))
+done
+
+# An unmatched glob leaves the loop body unexecuted, which would otherwise make
+# a missing amlogic_cpufreq look like success. Say so instead.
+[ "$applied" -gt 0 ] || {
+    echo "[chiron-cpufreq] no cpufreq policy found; is amlogic_cpufreq loaded?" >&2
+    exit 1
+}
+echo "[chiron-cpufreq] performance governor set on $applied policies"

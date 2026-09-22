@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# The appliance's name. bluetoothd takes the adapter name from the system
+# hostname -- main.conf leaves `Name` commented -- so this is also what a phone
+# sees when it scans for the board. The base Fenix rootfs shipped ubuntu-256,
+# which is the build host's name and has no business on the device.
+127.0.0.1	localhost
+127.0.1.1	chiron
+::1		localhost ip6-localhost ip6-loopback
+ff02::1		ip6-allnodes
+ff02::2		ip6-allrouters

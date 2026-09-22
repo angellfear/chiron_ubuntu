@@ -1,0 +1,91 @@
+#!/bin/bash
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Put wlan0 back after NetworkManager has given up on it for good.
+#
+# The link to the access point is marginal by design of the product -- the
+# antenna sits behind the speaker grille and -74 dBm is an ordinary reading --
+# so the supplicant loses association every few hours. NetworkManager cannot
+# tell a flaky link from a wrong key -- when the AP drops it mid-association
+# it invalidates the stored PSK and asks a secret agent for a new one. There is
+# no agent on an appliance that autologins into a kiosk session, so the journal
+# reads
+#
+#     Activation: (wifi) disconnected during association, asking for new key
+#     no secrets: No agents were available for this request
+#     state change: need-auth -> failed (reason 'no-secrets')
+#
+# and the connection stays failed with autoconnect blocked. The board is then
+# off the network until someone reaches it over the UART -- which is how this
+# was found.
+#
+# The PSK was in the system connection the whole time (netplan writes it
+# inline), so simply re-activating the profile always works. That is the entire
+# fix. It is a watchdog rather than a dispatcher script because the interesting
+# state is "NetworkManager has stopped trying", which is a steady state, not an
+# event: by the time it is reached the dispatcher has long since run.
+
+set -uo pipefail
+
+IFACE=${IFACE:-wlan0}
+INTERVAL=${INTERVAL:-20}
+# Do not race NetworkManager's own retries. Three quiet checks in a row means
+# it is not merely between attempts, it has stopped making them.
+GRACE=${GRACE:-3}
+
+log() { printf '[wifi-watchdog] %s\n' "$*"; }
+
+# netplan regenerates the profile with a fresh UUID on every boot, so the
+# connection has to be looked up by what is stable about it: its type and the
+# interface it is bound to.
+wifi_profile() {
+    local uuid type
+
+    while IFS=: read -r uuid type; do
+        [ "$type" = 802-11-wireless ] || continue
+        [ "$(nmcli -g connection.interface-name connection show "$uuid" \
+             2>/dev/null)" = "$IFACE" ] || continue
+        printf '%s\n' "$uuid"
+        return 0
+    done < <(nmcli -t -f UUID,TYPE connection show 2>/dev/null)
+    return 1
+}
+
+command -v nmcli >/dev/null || { log "nmcli is not installed"; exit 1; }
+
+down=0
+while :; do
+    sleep "$INTERVAL"
+
+    state=$(nmcli -t -f DEVICE,STATE device 2>/dev/null |
+            sed -n "s/^${IFACE}://p")
+    if [ "$state" = connected ]; then
+        down=0
+        continue
+    fi
+    down=$((down + 1))
+    [ "$down" -ge "$GRACE" ] || continue
+
+    if [ ! -e "/sys/class/net/$IFACE" ]; then
+        # The driver is gone, not the association. Reloading w2.ko from here
+        # would race load-w2.sh's power-cycle sequence, so say so and wait.
+        log "$IFACE has disappeared; nothing this can reconnect"
+        down=0
+        continue
+    fi
+
+    uuid=$(wifi_profile) || {
+        log "no wifi profile is bound to $IFACE"
+        down=0
+        continue
+    }
+
+    log "$IFACE is '${state:-absent}' after $((down * INTERVAL))s; reactivating $uuid"
+    if out=$(nmcli connection up uuid "$uuid" 2>&1); then
+        log "reconnected: $out"
+    else
+        printf '%s\n' "$out" | sed 's/^/[wifi-watchdog] /' >&2
+    fi
+    # Either way, start counting again rather than hammering the supplicant.
+    down=0
+done

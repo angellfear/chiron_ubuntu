@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 21/44] media: vdec: guard the delayed uvm buffer allocation
+
+Validated on this board.
+---
+ .../media_modules/amvdec_ports/aml_vcodec_dec.c  | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index e9814e52c..7afc6c560 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -2010,7 +2010,7 @@ static int aml_uvm_buf_delay_alloc(struct aml_vcodec_ctx *ctx,
+ 
+ 	u64 time = local_clock();
+ 	struct sg_table *cap_sgt;
+-	struct aml_uvm_buff_ref *ubuf = (struct aml_uvm_buff_ref *)am_buf->uvm_buf;
++	struct aml_uvm_buff_ref *ubuf;
+ 	struct sg_table *sgt;
+ 	struct dma_buf_attachment *dba = NULL;
+ 
+@@ -2023,6 +2023,13 @@ static int aml_uvm_buf_delay_alloc(struct aml_vcodec_ctx *ctx,
+ 		!dmabuf_is_uvm(dbuf))
+ 		return 0;
+ 
++	if (!am_buf || !am_buf->uvm_buf) {
++		v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
++			"delay allocation requires attached aml buffer\n");
++		return -EINVAL;
++	}
++	ubuf = (struct aml_uvm_buff_ref *)am_buf->uvm_buf;
++
+ 	obj = dmabuf_get_uvm_buf_obj(dbuf);
+ 	mbuf = container_of(obj, struct mua_buffer, base);
+ 
+@@ -4634,7 +4641,12 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
+ 				"aml_buf_attach fail!\n");
+ 			return ret;
+ 		}
+-		aml_uvm_buf_delay_alloc(ctx, vb2_v4l2);
++		ret = aml_uvm_buf_delay_alloc(ctx, vb2_v4l2);
++		if (ret) {
++			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
++				"aml_uvm_buf_delay_alloc fail!\n");
++			return ret;
++		}
+ 	}
+ 
+ 	if (V4L2_TYPE_IS_OUTPUT(vb->type)) {

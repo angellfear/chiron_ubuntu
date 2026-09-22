@@ -1,0 +1,36 @@
+From 9d6c59d827aac1503bcc9c6b7aa28b309efd0f60 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Mon, 31 Aug 2026 10:24:42 +0000
+Subject: [PATCH] arm64: dts: give the ISP and its adapter the camera CMA pool
+
+The board declares linux,camera_cma -- 272 MiB, reusable, 4 MiB aligned -- but
+nothing referenced it, so both the ISP and its adapter fell back to the default
+CMA area. That area is the one chiron-cma lends to the page cache, and a
+fragmented 1.6 GiB of it cannot satisfy the order-10 contiguous allocations the
+capture buffers need: REQBUFS on the hardware node failed with ENOMEM while
+CmaFree still read a gigabyte, and dmesg showed cma_alloc failing against the
+area named reserved rather than against camera_cma.
+
+The factory Android device tree binds isp0 and
+adapter0 to this same pool, by the same phandle. This restores that.
+
+Change-Id: Ib0258bb6871f70ba75f3d6881c1916ae659a04a3
+---
+ arch/arm64/boot/dts/amlogic/chiron.dts | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+index f1d44c87e..7e1cc2701 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -2243,8 +2243,10 @@
+ 
+ &adapter0 {
+ 	status = "okay";
++	memory-region = <&camera_cma_reserved>;
+ };
+ 
+ &isp0 {
+ 	status = "okay";
++	memory-region = <&camera_cma_reserved>;
+ };

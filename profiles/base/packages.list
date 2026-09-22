@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Additional packages beyond the Fenix Ubuntu minimal profile.
+openssh-server
+network-manager
+# NetworkManager only recommends it, and the profile installs with
+# --no-install-recommends: without it every Wi-Fi device stays "unavailable"
+# with "Failed to D-Bus activate wpa_supplicant service".
+wpasupplicant
+iproute2
+iw
+wireless-regdb

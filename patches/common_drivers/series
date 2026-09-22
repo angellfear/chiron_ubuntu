@@ -1,0 +1,55 @@
+# One relative patch path per line after hardware acceptance.
+# Applied in this order:
+# the board device tree and the accepted kernel configuration first, then the
+# accepted external-source delta and the per-subsystem patches.
+0001-arm64-dts-add-the-Chiron-board-description.patch
+0002-config-add-chiron_defconfig.patch
+0003-media-osd-drive-the-OSD-geometry-from-the-active-vou.patch
+0004-media-osd-program-the-T7C-OSD-registers-for-the-pane.patch
+0005-media-fb-export-osd_enable_display-for-the-display-o.patch
+0006-drm-meson-bring-up-the-vendor-DRM-stack-behind-drm_s.patch
+0007-drm-meson-initialise-the-ION-heaps-the-DRM-stack-all.patch
+0008-drm-meson-accept-imported-PRIME-buffers-as-scanout-s.patch
+0009-drm-meson-build-an-sg_table-for-ION-backed-GEM-objec.patch
+0010-drm-meson-register-the-contiguous-heap-codecmm-scano.patch
+0011-drm-meson-wire-the-GE2D-blitter-into-the-DRM-stack.patch
+0012-tee-optee-use-the-reserved-shared-memory-pool.patch
+0013-tee-optee-make-TA-enumeration-optional-at-probe.patch
+0014-media-fix-the-gcc-13-enum-versus-u32-prototype-misma.patch
+0015-amdolby_vision-fix-the-gcc-13-enum-versus-u32-protot.patch
+0016-drm-meson-reject-atomic-commits-during-shutdown-inst.patch
+0017-drm-meson-skip-the-vblank-wait-in-the-shutdown-path.patch
+0018-drm-meson-recover-a-dropped-mode-name-from-the-conne.patch
+0019-media-guard-the-restart-and-shutdown-callbacks.patch
+0020-arm64-meson-guard-the-unsupported-FIQ-bridge.patch
+0021-media-vdec-guard-the-delayed-uvm-buffer-allocation.patch
+0022-media-vdec-fail-capture-buffers-queued-without-an-am.patch
+0023-media-vdec-size-single-plane-capture-buffers-as-4-2-.patch
+0024-media-vdec-report-NV21M-so-the-FFmpeg-V4L2-mapping-m.patch
+0025-media-vdec-always-set-a-concrete-field-value-on-dequ.patch
+0026-media-vdec-default-an-unknown-sample-aspect-to-squar.patch
+0027-media-vdec-keep-the-vendor-raw_data-out-of-VIDIOC_G_.patch
+0028-media-h264-describe-the-T7C-packed-crop-ABI.patch
+0029-media-h264-apply-the-T7C-packed-crop-to-the-runtime-.patch
+0030-media-h264-apply-the-T7C-packed-crop-to-the-exported.patch
+0031-media-h264-log-the-resolved-crop-ABI-once.patch
+0032-media-mpeg12-treat-an-all-zero-POC-as-unavailable.patch
+0033-Chiron-gcc-13-build-fixes-and-a-bounded-reboot-path.patch
+0034-media-vrr-sound-leave-the-hardware-alone-on-halt-and.patch
+0035-drm-meson-bound-the-terminal-display-shutdown.patch
+0036-ASoC-meson-pdm-keep-the-lane-mask-the-device-tree-as.patch
+0037-media-amlsens-make-the-sensor-pwdn-GPIO-optional-and.patch
+0038-media-amlsens-register-the-OV13B10-sensor-subdevice.patch
+0039-media-amlcam-present-a-plain-30-fps-capture-input-to.patch
+0040-media-amlcam-publish-one-validated-output-mode-on-th.patch
+0041-media-amlcam-acknowledge-the-final-ISP-frame-IRQ-aft.patch
+0042-media-amlcam-re-enable-the-ISP-timing-generator-on-e.patch
+0043-media-amlcam-give-each-camera-video-node-a-stable-mi.patch
+0044-media-amlcam-refuse-to-allocate-raw-buffers-without-.patch
+0045-arm64-dts-enable-chiron-cpu-dvfs.patch
+0046-arm64-dts-give-the-isp-and-adapter-the-camera-cma-po.patch
+0047-media-amlcam-balance-the-offline-buffer-queue.patch
+0048-arm64-Chiron-complete-boot-hardware-integration.patch
+0049-Chiron-clean-up-validated-boot-diagnostics.patch
+0050-ASoC-meson-keep-deferred-codec-probes-quiet.patch
+0051-arm64-dts-Chiron-skip-unused-Broadcom-WiFi-buffers.patch

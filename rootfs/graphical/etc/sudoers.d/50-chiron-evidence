@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# One command, for the desktop shortcut that collects crash evidence.
+#
+# Same shape and same reasoning as 50-chiron-ssh one name below: the shortcut
+# is tapped on a touchscreen, the tapper is already in the sudo group, and a
+# password prompt would mean an on-screen keyboard over a modal dialog for a
+# command that same person could run from a shell. What this removes is the
+# prompt, not the authority.
+#
+# The grant is one absolute path with one fixed argument. --manual is the
+# collector's manual snapshot mode, which writes one archive onto the tapping
+# account's Desktop and reads the journals and the pstore archive; it performs
+# no other action. Any other invocation, and every other command, still asks.
+%sudo ALL=(root) NOPASSWD: /usr/local/sbin/chiron-evidence --manual

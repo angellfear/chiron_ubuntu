@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+command -v pwsh >/dev/null 2>&1 || {
+    echo "pwsh is required for the repository policy check" >&2
+    exit 1
+}
+pwsh -NoProfile -File "$root/scripts/check-repository.ps1" -Root "$root"

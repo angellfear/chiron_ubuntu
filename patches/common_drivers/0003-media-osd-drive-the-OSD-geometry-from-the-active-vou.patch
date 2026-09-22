@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 03/44] media: osd: drive the OSD geometry from the active vout
+ mode
+
+Validated on this board.
+---
+ drivers/media/osd/osd_fb.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/drivers/media/osd/osd_fb.c b/drivers/media/osd/osd_fb.c
+index 08c38e6c5..d3e645277 100644
+--- a/drivers/media/osd/osd_fb.c
++++ b/drivers/media/osd/osd_fb.c
+@@ -1686,6 +1686,31 @@ static int malloc_osd_memory(struct fb_info *info)
+ 	return 0;
+ }
+ 
++static void chiron_osd_geometry(struct osd_fb_dev_s *fbdev)
++{
++	struct fb_info *info = fbdev->fb_info;
++
++	if (fbdev->fb_index != DEV_OSD0 || info->var.xres != 1200 ||
++	    info->var.yres != 1920)
++		return;
++
++	/* Chiron's panel is portrait, while fb0's memory is linear and padded. */
++	fbdev->osd_ctl.disp_start_x = 0;
++	fbdev->osd_ctl.disp_start_y = 0;
++	fbdev->osd_ctl.disp_end_x = 1199;
++	fbdev->osd_ctl.disp_end_y = 1919;
++	osd_set_color_mode(DEV_OSD0,
++			   &default_color_format_array[COLOR_INDEX_32_ARGB]);
++	osd_set_window_axis_hw(DEV_OSD0, 0, 0, 1199, 1919);
++	osd_set_free_scale_axis_hw(DEV_OSD0, 0, 0, 1199, 1919);
++	osd_set_free_scale_enable_hw(DEV_OSD0, 0x10001);
++	osd_enable_hw(DEV_OSD0, 1);
++	/* Debian has no usable RDMA completion source for this display path. */
++	walk_through_update_list();
++	osd_reg_write(VPP_POSTBLEND_H_SIZE, 0x078004b0);
++	osd_reg_write(VPP_MISC, 0x100000c8);
++}
++
+ static int osd_open(struct fb_info *info, int arg)
+ {
+ 	u32 fb_index;
+@@ -1724,6 +1749,7 @@ static int osd_open(struct fb_info *info, int arg)
+ 			if (ret < 0)
+ 				return ret;
+ 		}
++		chiron_osd_geometry(fbdev);
+ 
+ 	} else {
+ 		/* move alloc mem when osd_mmap */

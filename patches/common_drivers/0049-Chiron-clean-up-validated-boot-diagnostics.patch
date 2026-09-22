@@ -1,0 +1,236 @@
+From 04f9b8ffcfa56e359aaddcb1a3c5be94656f0720 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Tue, 1 Sep 2026 20:58:31 +0000
+Subject: [PATCH] Chiron: clean up validated boot diagnostics
+
+Change-Id: I2f064db0508e1ffa9259b068abf2fa6f00b38426
+---
+ arch/arm64/boot/dts/amlogic/chiron-drm.dtsi   |  7 +++++++
+ arch/arm64/boot/dts/amlogic/chiron.dts        | 19 +++++++++++++++----
+ arch/arm64/configs/chiron_defconfig           |  2 +-
+ drivers/drm/meson_lcd.c                       |  3 +++
+ .../media/vout/lcd/lcd_tablet/lcd_tablet.c    | 10 +++++++---
+ sound/soc/amlogic/auge/pdm.c                  |  2 --
+ sound/soc/amlogic/auge/resample.c             |  2 --
+ sound/soc/amlogic/auge/spdif.c                |  2 --
+ sound/soc/amlogic/auge/tdm.c                  |  2 --
+ 9 files changed, 33 insertions(+), 16 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi b/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
+index 96038f89e..bed01b37c 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
++++ b/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
+@@ -11,6 +11,13 @@
+ 
+ &drm_vpu {
+ 	status = "okay";
++	/* T7 uses the dedicated AFBCD AXI path for the OSD. */
++	osd_axi_sel = <1>;
++};
++
++&vout {
++	interrupts = <GIC_SPI 197 IRQ_TYPE_EDGE_RISING>;
++	interrupt-names = "vsync";
+ };
+ 
+ &drm_to_hdmitx {
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+index de06da2df..1be51aa96 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -348,7 +348,7 @@
+ 
+ 	tdmout_c: tdmout_c {
+ 		mux {
+-			groups = "mclk1", "tdm_sclk1", "tdm_fs1", "tdm_d2";
++			groups = "tdm_sclk1", "tdm_fs1", "tdm_d2";
+ 			function = "tdm";
+ 		};
+ 	};
+@@ -459,6 +459,7 @@
+ 			 <&clkc 0x2f>, <&clkaudio 0x31>;
+ 		clock-names = "mclk", "mclk_pad", "clk_srcpll",
+ 			      "samesource_srcpll", "samesource_clk";
++		suspend-clk-off = <0>;
+ 		pinctrl-names = "tdm_pins";
+ 		pinctrl-0 = <&tdm_a_pin &tdm_d0_pin &tdm_d1_pin &tdma_clk_pin>;
+ 		status = "okay";
+@@ -475,6 +476,7 @@
+ 		swap_channels = <1 0 2 3 4 5 6 7>;
+ 		clocks = <&clkaudio 0x2b>, <&clkaudio 0x42>, <&clkc 0x2f>;
+ 		clock-names = "mclk", "mclk_pad", "clk_srcpll";
++		suspend-clk-off = <0>;
+ 		pinctrl-names = "tdm_pins";
+ 		pinctrl-0 = <&tdmout_b &tdm_d10_pin &tdm_d11_pin
+ 			     &mclk_2_pin &tdmb_clk_pin>;
+@@ -488,6 +490,7 @@
+ 		dai-tdm-clk-sel = <2>;
+ 		clocks = <&clkaudio 0x2c>, <&clkaudio 0x41>, <&clkc 0x31>;
+ 		clock-names = "mclk", "mclk_pad", "clk_srcpll";
++		suspend-clk-off = <0>;
+ 		pinctrl-names = "tdm_pins";
+ 		pinctrl-0 = <&mclk_1_pin &tdmout_c &tdm_d2_pin &tdmc_clk_pin>;
+ 		start_clk_enable = <1>;
+@@ -504,8 +507,8 @@
+ 		compatible = "amlogic, tm2-revb-snd-pdm";
+ 		#sound-dai-cells = <0>;
+ 		clocks = <&clkaudio 0x01>, <&clkc 0x07>, <&clkc 0x33>,
+-			 <&clkaudio 0x35>, <&clkaudio 0x36>;
+-		clock-names = "gate", "sysclk_srcpll", "dclk_srcpll",
++			 <&xtal>, <&clkaudio 0x35>, <&clkaudio 0x36>;
++		clock-names = "gate", "sysclk_srcpll", "dclk_srcpll", "xtal",
+ 			      "pdm_dclk", "pdm_sysclk";
+ 		pinctrl-names = "pdm_pins";
+ 		pinctrl-0 = <&pdmin_pin>;
+@@ -521,6 +524,7 @@
+ 			 <&clkaudio 0x11>, <&clkaudio 0x30>, <&clkaudio 0x31>;
+ 		clock-names = "sysclk", "fixed_clk", "gate_spdifin",
+ 			      "gate_spdifout", "clk_spdifin", "clk_spdifout";
++		suspend-clk-off = <0>;
+ 		interrupts = <GIC_SPI 35 IRQ_TYPE_EDGE_RISING>;
+ 		interrupt-names = "irq_spdifin";
+ 		pinctrl-names = "spdif_pins", "spdif_pins_mute";
+@@ -536,6 +540,7 @@
+ 		#sound-dai-cells = <0>;
+ 		clocks = <&clkc 0x31>, <&clkaudio 0x15>, <&clkaudio 0x37>;
+ 		clock-names = "sysclk", "gate_spdifout", "clk_spdifout";
++		suspend-clk-off = <0>;
+ 		status = "okay";
+ 	};
+ 
+@@ -562,6 +567,7 @@
+ 		compatible = "amlogic, t5-resample-a";
+ 		clocks = <&clkc 0x2f>, <&clkaudio 0x2b>, <&clkaudio 0x32>;
+ 		clock-names = "resample_pll", "resample_src", "resample_clk";
++		suspend-clk-off = <0>;
+ 		resample_module = <8>;
+ 		status = "okay";
+ 	};
+@@ -2088,7 +2094,12 @@
+ &aml_bt {
+ 	status = "okay";
+ 	reset-gpios = <&gpio GPIOC_2 GPIO_ACTIVE_HIGH>;
+-	hostwake-gpios = <&gpio GPIOC_5 GPIO_ACTIVE_HIGH>;
++	btwakeup-gpios = <&gpio GPIOC_5 GPIO_ACTIVE_HIGH>;
++};
++
++/* Standard cpufreq and Panfrost cooling devices own these thermal maps. */
++&meson_cooldev {
++	status = "disabled";
+ };
+ 
+ /* Panfrost needs the standard binding for the T7C ACE-Lite path. */
+diff --git a/arch/arm64/configs/chiron_defconfig b/arch/arm64/configs/chiron_defconfig
+index 692099ce0..83fa266c1 100644
+--- a/arch/arm64/configs/chiron_defconfig
++++ b/arch/arm64/configs/chiron_defconfig
+@@ -6653,7 +6653,7 @@ CONFIG_SQUASHFS_FILE_CACHE=y
+ # CONFIG_SQUASHFS_DECOMP_SINGLE is not set
+ # CONFIG_SQUASHFS_DECOMP_MULTI is not set
+ CONFIG_SQUASHFS_DECOMP_MULTI_PERCPU=y
+-# CONFIG_SQUASHFS_XATTR is not set
++CONFIG_SQUASHFS_XATTR=y
+ CONFIG_SQUASHFS_ZLIB=y
+ CONFIG_SQUASHFS_LZ4=y
+ CONFIG_SQUASHFS_LZO=y
+diff --git a/drivers/drm/meson_lcd.c b/drivers/drm/meson_lcd.c
+index 7a28ae03b..bef570f86 100644
+--- a/drivers/drm/meson_lcd.c
++++ b/drivers/drm/meson_lcd.c
+@@ -311,6 +311,9 @@ static void meson_panel_cal_brr(struct meson_panel *am_lcd,
+ 	int i;
+ 	struct drm_vrr_mode_group *group;
+ 
++	if (!am_lcd->num_vrr_group)
++		return;
++
+ 	for (i = 0; i < am_lcd->num_vrr_group; i++) {
+ 		group = &am_lcd->groups[i];
+ 		DRM_DEBUG("%s %u-%u,%u-%u,%u-%u,%u\n", __func__, group->width,
+diff --git a/drivers/media/vout/lcd/lcd_tablet/lcd_tablet.c b/drivers/media/vout/lcd/lcd_tablet/lcd_tablet.c
+index a4f00866a..52ace794e 100644
+--- a/drivers/media/vout/lcd/lcd_tablet/lcd_tablet.c
++++ b/drivers/media/vout/lcd/lcd_tablet/lcd_tablet.c
+@@ -98,8 +98,11 @@ static int lcd_set_current_vmode(enum vmode_e mode, void *data)
+ 
+ 	mutex_lock(&lcd_power_mutex);
+ 
+-	pdrv->vrr_dev = kzalloc(sizeof(*pdrv->vrr_dev), GFP_KERNEL);
+-	if (pdrv->vrr_dev) {
++	if (!pdrv->vrr_dev) {
++		pdrv->vrr_dev = kzalloc(sizeof(*pdrv->vrr_dev), GFP_KERNEL);
++		if (!pdrv->vrr_dev)
++			goto vrr_done;
++
+ 		sprintf(pdrv->vrr_dev->name, "lcd%d_dev", pdrv->index);
+ 		pdrv->vrr_dev->output_src = VRR_OUTPUT_ENCL;
+ 		pdrv->vrr_dev->lfc_switch = lcd_vrr_lfc_switch;
+@@ -109,6 +112,8 @@ static int lcd_set_current_vmode(enum vmode_e mode, void *data)
+ 		aml_vrr_register_device(pdrv->vrr_dev, pdrv->index);
+ 	}
+ 
++vrr_done:
++
+ 	if (lcd_debug_print_flag & LCD_DBG_PR_NORMAL) {
+ 		LCDPR("[%d]: %s: drv_mode=%s\n",
+ 		      pdrv->index, __func__, pdrv->vinfo.name);
+@@ -652,4 +657,3 @@ int lcd_mode_tablet_remove(struct aml_lcd_drv_s *pdrv)
+ {
+ 	return 0;
+ }
+-
+diff --git a/sound/soc/amlogic/auge/pdm.c b/sound/soc/amlogic/auge/pdm.c
+index bf77150d8..60fc3e534 100644
+--- a/sound/soc/amlogic/auge/pdm.c
++++ b/sound/soc/amlogic/auge/pdm.c
+@@ -1282,8 +1282,6 @@ static int aml_pdm_platform_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	p_pdm->clk_src_cd = devm_clk_get(&pdev->dev, "clk_src_cd");
+-	if (IS_ERR(p_pdm->clk_src_cd))
+-		dev_warn(&pdev->dev, "no clk_src_cd clock for 44k case\n");
+ 	ret = snd_soc_of_get_slot_mask(node, "lane-mask-in",
+ 				       &p_pdm->lane_mask_in);
+ 	if (!ret) {
+diff --git a/sound/soc/amlogic/auge/resample.c b/sound/soc/amlogic/auge/resample.c
+index 0f6ca5d76..4c9fdac66 100644
+--- a/sound/soc/amlogic/auge/resample.c
++++ b/sound/soc/amlogic/auge/resample.c
+@@ -1071,8 +1071,6 @@ static int resample_platform_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 	p_resample->clk_src_cd = devm_clk_get(&pdev->dev, "clk_src_cd");
+-	if (IS_ERR(p_resample->clk_src_cd))
+-		dev_warn(&pdev->dev, "no clk_src_cd clock for hifi1 case\n");
+ 
+ 	p_resample->dev = dev;
+ 	dev_set_drvdata(dev, p_resample);
+diff --git a/sound/soc/amlogic/auge/spdif.c b/sound/soc/amlogic/auge/spdif.c
+index a4b4040d8..9b14733d5 100644
+--- a/sound/soc/amlogic/auge/spdif.c
++++ b/sound/soc/amlogic/auge/spdif.c
+@@ -2065,8 +2065,6 @@ static int aml_spdif_parse_of(struct platform_device *pdev)
+ 	}
+ 
+ 	p_spdif->clk_src_cd = devm_clk_get(&pdev->dev, "clk_src_cd");
+-	if (IS_ERR(p_spdif->clk_src_cd))
+-		dev_warn(&pdev->dev, "no clk_src_cd clock for 44k case\n");
+ 
+ 	ret = of_property_read_u32(pdev->dev.of_node,
+ 				"clk_tuning_enable",
+diff --git a/sound/soc/amlogic/auge/tdm.c b/sound/soc/amlogic/auge/tdm.c
+index d16b9ce4e..971b74f02 100644
+--- a/sound/soc/amlogic/auge/tdm.c
++++ b/sound/soc/amlogic/auge/tdm.c
+@@ -2730,8 +2730,6 @@ static int aml_tdm_platform_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	p_tdm->clk_src_cd = devm_clk_get(&pdev->dev, "clk_src_cd");
+-	if (IS_ERR(p_tdm->clk_src_cd))
+-		dev_err(&pdev->dev, "Can't get clk_src_cd\n");
+ 
+ 	if ((!IS_ERR(p_tdm->clk)) && ((aml_return_chip_id() == CLK_NOTIFY_CHIP_ID) ||
+ 		(aml_return_chip_id() == CLK_NOTIFY_CHIP_ID_T3X))) {
+-- 
+2.43.0
+

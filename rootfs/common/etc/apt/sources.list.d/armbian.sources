@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+Types: deb
+URIs: https://apt.armbian.com
+Suites: resolute
+Components: main resolute-desktop
+Architectures: arm64
+Signed-By: /usr/share/keyrings/armbian.asc

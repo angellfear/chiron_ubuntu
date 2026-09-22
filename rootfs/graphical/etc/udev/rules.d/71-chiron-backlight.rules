@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# The user-session Chiron control daemon owns the ambient-light policy.
+SUBSYSTEM=="backlight", KERNEL=="aml-bl", GROUP="video", MODE="0664"

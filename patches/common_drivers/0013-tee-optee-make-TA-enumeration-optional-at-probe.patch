@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 13/44] tee: optee: make TA enumeration optional at probe
+
+Validated on this board.
+---
+ drivers/aml_tee/optee/core.c          | 12 +++++++++++-
+ drivers/aml_tee/optee/device.c        |  6 ++++++
+ drivers/aml_tee/optee/optee_private.h |  1 +
+ 3 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/aml_tee/optee/core.c b/drivers/aml_tee/optee/core.c
+index c6fd76d9b..c335e7d8c 100644
+--- a/drivers/aml_tee/optee/core.c
++++ b/drivers/aml_tee/optee/core.c
+@@ -81,7 +81,17 @@ void optee_pool_op_free_helper(struct tee_shm_pool *pool, struct tee_shm *shm,
+ 
+ static void optee_bus_scan(struct work_struct *work)
+ {
+-	WARN_ON(optee_enumerate_devices(PTA_CMD_GET_DEVICES_SUPP));
++	int rc = optee_enumerate_devices(PTA_CMD_GET_DEVICES_SUPP);
++
++	if (rc == -EOPNOTSUPP) {
++		pr_info("secure world has no optional device enumeration PTA\n");
++		return;
++	}
++
++	/* Transport and enumeration failures other than an absent optional PTA
++	 * remain visible: they can indicate a real OP-TEE regression.
++	 */
++	WARN_ON(rc);
+ }
+ 
+ int optee_open(struct tee_context *ctx, bool cap_memref_null)
+diff --git a/drivers/aml_tee/optee/device.c b/drivers/aml_tee/optee/device.c
+index 2da46130e..c736c0512 100644
+--- a/drivers/aml_tee/optee/device.c
++++ b/drivers/aml_tee/optee/device.c
+@@ -41,6 +41,12 @@ static int get_devices(struct tee_context *ctx, u32 session,
+ 	param[0].u.memref.shm_offs = 0;
+ 
+ 	ret = tee_client_invoke_func(ctx, &inv_arg, param);
++	/* Device enumeration is an optional pseudo-TA interface. Chiron's
++	 * secure world does not implement it, while normal userspace TAs work.
++	 */
++	if (ret >= 0 && (inv_arg.ret == TEEC_ERROR_NOT_IMPLEMENTED ||
++			 inv_arg.ret == TEEC_ERROR_NOT_SUPPORTED))
++		return -EOPNOTSUPP;
+ 	if ((ret < 0) || ((inv_arg.ret != TEEC_SUCCESS) &&
+ 			  (inv_arg.ret != TEEC_ERROR_SHORT_BUFFER))) {
+ 		pr_err("PTA_CMD_GET_DEVICES invoke function err: %x\n",
+diff --git a/drivers/aml_tee/optee/optee_private.h b/drivers/aml_tee/optee/optee_private.h
+index 9a54d32d4..a6f253d4c 100644
+--- a/drivers/aml_tee/optee/optee_private.h
++++ b/drivers/aml_tee/optee/optee_private.h
+@@ -20,6 +20,7 @@
+ /* Some Global Platform error codes used in this driver */
+ #define TEEC_SUCCESS			0x00000000
+ #define TEEC_ERROR_BAD_PARAMETERS	0xFFFF0006
++#define TEEC_ERROR_NOT_IMPLEMENTED	0xFFFF0009
+ #define TEEC_ERROR_NOT_SUPPORTED	0xFFFF000A
+ #define TEEC_ERROR_COMMUNICATION	0xFFFF000E
+ #define TEEC_ERROR_OUT_OF_MEMORY	0xFFFF000C

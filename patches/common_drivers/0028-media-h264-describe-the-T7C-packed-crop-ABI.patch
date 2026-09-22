@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 28/44] media: h264: describe the T7C packed crop ABI
+
+Validated on this board.
+---
+ .../frame_provider/decoder_v4l/h264_multi/vmh264.c   | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+index 21aaae93a..3b572fc4e 100644
+--- a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
++++ b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+@@ -1183,7 +1183,17 @@ static int is_crop_valid(struct vdec_h264_hw_s *hw, int mb_width, int mb_height,
+ 			break;
+ 	}
+ 
+-	if (chroma_format_idc == 0) {
++	/*
++	 * T7/T7C frame-mode firmware publishes total horizontal and vertical crop
++	 * in pixels through the legacy left/right DPB slots. For example an SPS
++	 * crop of right=2,bottom=10 arrives as left=2,right=10,top=bottom=0.
++	 * Treating those values as chroma-unit right/bottom offsets swaps the
++	 * axes and reports 620x368 instead of 638x358.
++	 */
++	if (is_cpu_t7() || is_cpu_t7c()) {
++		crop_right = p_H264_Dpb->frame_crop_left_offset;
++		crop_bottom = p_H264_Dpb->frame_crop_right_offset;
++	} else if (chroma_format_idc == 0) {
+ 		crop_right = p_H264_Dpb->frame_crop_right_offset;
+ 		crop_bottom = p_H264_Dpb->frame_crop_bottom_offset *
+ 			(2 - frame_mbs_only_flag);

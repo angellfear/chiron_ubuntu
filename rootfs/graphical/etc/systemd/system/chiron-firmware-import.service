@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Import the board's own vendor firmware from its Android volumes
+Documentation=file:/usr/local/sbin/chiron-firmware-import
+# The Android volumes are where the files come from, and the desktop session is
+# where the report goes. greetd is ordered against rather than required: on a
+# board whose session failed to start, the import should still happen and say
+# so on the console.
+After=chiron-android-volumes.service greetd.service
+# Wants, not Requires: if the Android volumes did not come up, this unit should
+# still run and say so -- it checks for the mounts itself and reports their
+# absence, which is more use than not starting at all.
+Wants=chiron-android-volumes.service
+# Nothing that consumes these files is ordered against this unit. By the time
+# it runs they have already failed for want of the firmware, and a successful
+# import reboots -- the second boot is the one that comes up whole. Ordering
+# the consumers after this would only delay every later boot for a unit that
+# exits immediately once the files are in place.
+ConditionPathExists=/usr/local/lib/chiron/firmware-import.manifest
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-firmware-import
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=graphical.target

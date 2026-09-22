@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Honor the Chiron hardware camera privacy shutter
+Requires=chiron-camera-bridge.service
+After=chiron-camera-bridge.service chiron-input-load.service
+# The ISP runtime is installed on the board by chiron-vendor-fetch, not
+# shipped in the image; until it has arrived there is no camera to publish.
+ConditionPathExists=/usr/lib/chiron-camera/ispService
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/chiron-camera/chiron-camera-privacy
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# One command, for the desktop shortcut that turns SSH on.
+#
+# The shortcut is tapped on a touchscreen. Asking to authenticate there means
+# raising the on-screen keyboard over a modal dialog to type a password that is
+# printed in a file on the same desktop, which buys nothing; and the person
+# tapping it is already in the sudo group, so they can run the same systemctl
+# by hand. What this removes is the prompt, not the authority.
+#
+# The grant is one absolute path with one fixed argument. --apply is the half
+# of chiron-ssh-enable that enables and starts ssh.socket and does nothing
+# else; the script rejects it unless it is root, so this is the only way it is
+# reached. Any other invocation, and every other command, still asks.
+#
+# polkit would be the other way to do this, and is not used here: on this board
+# it has been the fragile part -- the agent registers per session, the helper
+# has to fall back to setuid because the vendor kernel has no pidfd -- and a
+# rule that quietly fails to apply produces exactly the password prompt this
+# exists to avoid. sudo has no session to be registered in.
+%sudo ALL=(root) NOPASSWD: /usr/local/bin/chiron-ssh-enable --apply

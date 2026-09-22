@@ -1,0 +1,222 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Copy the device's own vendor firmware out of its Android volumes, once.
+#
+# The image ships none of this firmware (the W2 Wi-Fi firmware is the one
+# vendor file it does carry; THIRD_PARTY.md says why). None of it is ours to
+# redistribute: the touch controller firmware is Himax's, the trusted
+# applications, the video microcode and the Bluetooth firmware are Amlogic's,
+# and the amplifier tuning is the appliance vendor's.
+# Every board that runs this image already carries all of them, so the image
+# ships a list and the board supplies the bytes. What leaves this project is
+# that list, which is not anyone's work; what lands in /usr/lib is a copy the
+# owner of the board made from their own device.
+#
+# Matching is deliberately not pinned to a checksum. The vendor reissues these
+# files, and a rebuild with a minor change is the same firmware under a new
+# hash; refusing it would strand a working board. A recorded checksum is used
+# as a fast path when it happens to match, and the expected size only tells
+# same-named files apart. firmware-import.manifest explains both columns and
+# why the size bound is load-bearing for video_ucode.bin.
+#
+# Ordering. This runs after chiron-android-volumes.service, which is what
+# mounts the read-only Android filesystems, and after greetd, so that a desktop
+# session exists for notify-send to reach. It therefore runs *after* the units
+# that need these files have already failed -- which is why an import that
+# brought anything in reboots, even when some other file could not be found.
+# Without that reboot the files that did arrive stay unused: video and touch
+# would stay down until someone rebooted by hand. The second boot is the one
+# where the board is as whole as its firmware allows.
+#
+# Idempotent by construction: if every required destination is already present
+# this exits 0 before touching anything, so it is a no-op on every boot after
+# the first. A file marked optional in the manifest is attempted along with the
+# rest but never keeps the import running; a required file that stays missing
+# is reported on every boot, and since nothing new is imported then, there is
+# no reboot loop.
+set -eu
+
+manifest=/usr/local/lib/chiron/firmware-import.manifest
+# The read-only Android system filesystems chiron-prepare-android-volumes
+# mounts. These hold the vendor firmware; the owner's userdata partition is
+# not mounted at all.
+sources="system system_ext vendor product odm"
+source_root=/run/chiron-android-volumes/source
+desktop_uid=1000
+
+log() { printf '[firmware-import] %s\n' "$*"; }
+
+# Best-effort desktop notification. Root has no session bus of its own, so this
+# reaches the logged-in desktop through its bus if that bus is there, and is
+# silently skipped if it is not -- then the console output below is the whole
+# report.
+notify() {
+    # No runtime directory means no session at all -- a console-only boot.
+    # Return at once rather than stalling the boot waiting for a desktop that
+    # is never coming.
+    [ -d "/run/user/$desktop_uid" ] || return 0
+    bus=/run/user/$desktop_uid/bus
+    # A session that is starting is a different matter: greetd having started
+    # is not the same as its bus being up, so wait briefly rather than lose the
+    # one message that matters -- the report of what could not be found.
+    waited=0
+    while [ ! -S "$bus" ] && [ "$waited" -lt 20 ]; do
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    [ -S "$bus" ] || return 0
+    command -v notify-send >/dev/null 2>&1 || return 0
+    command -v runuser >/dev/null 2>&1 || return 0
+    user=$(getent passwd "$desktop_uid" | cut -d: -f1) || return 0
+    [ -n "$user" ] || return 0
+    runuser -u "$user" -- \
+        env "DBUS_SESSION_BUS_ADDRESS=unix:path=$bus" \
+        notify-send -a "Прошивки" -i drive-harddisk "$1" "$2" \
+        >/dev/null 2>&1 || true
+}
+
+report() {
+    log "$1: $2"
+    notify "$1" "$2"
+}
+
+[ "$(id -u)" -eq 0 ] || { log "ERROR: root privileges are required" >&2; exit 2; }
+[ -r "$manifest" ] || { log "ERROR: $manifest is missing" >&2; exit 2; }
+
+sha_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+# --- is there anything to do at all? ------------------------------------------
+
+missing=0
+while read -r want_sha want_size destination flag; do
+    case "$want_sha" in ''|\#*) continue ;; esac
+    [ "${flag:-}" = optional ] && continue
+    [ -f "$destination" ] || missing=$((missing + 1))
+done <"$manifest"
+
+if [ "$missing" -eq 0 ]; then
+    exit 0
+fi
+
+log "$missing firmware file(s) absent; importing from the Android volumes"
+
+# --- find the search roots ----------------------------------------------------
+
+roots=""
+for name in $sources; do
+    [ -d "$source_root/$name" ] || continue
+    findmnt -rn --mountpoint "$source_root/$name" >/dev/null 2>&1 || continue
+    roots="$roots $source_root/$name"
+done
+
+if [ -z "$roots" ]; then
+    report "Прошивки не перенесены" \
+"Разделы Android не смонтированы.
+Проверьте chiron-android-volumes.service."
+    exit 1
+fi
+
+# Locate one file. The manifest does not name a path inside the Android tree
+# on purpose -- those paths are the vendor's layout and they differ between
+# firmware revisions. A recorded checksum, when one matches, settles it at
+# once. Otherwise the candidates carrying the right name are judged on size:
+# anything between half and double the expected size is plausible, and the
+# closest one wins. That is what keeps the 389,696-byte T7 codec firmware from
+# being imported as the 1,951,232-byte signed video package it shares a name
+# with, while still accepting a vendor rebuild of either.
+locate() {
+    base=$1
+    want_sha=$2
+    want_size=$3
+
+    best=
+    best_delta=
+
+    for root in $roots; do
+        for candidate in $(find "$root" -type f -name "$base" 2>/dev/null); do
+            if [ -n "$want_sha" ] && [ "$want_sha" != - ] \
+               && [ "$(sha_of "$candidate")" = "$want_sha" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+            size=$(stat -c %s "$candidate" 2>/dev/null) || continue
+            [ "$size" -ge $((want_size / 2)) ] || continue
+            [ "$size" -le $((want_size * 2)) ] || continue
+            if [ "$size" -gt "$want_size" ]; then
+                delta=$((size - want_size))
+            else
+                delta=$((want_size - size))
+            fi
+            if [ -z "$best" ] || [ "$delta" -lt "$best_delta" ]; then
+                best=$candidate
+                best_delta=$delta
+            fi
+        done
+    done
+
+    [ -n "$best" ] || return 1
+    printf '%s\n' "$best"
+}
+
+# --- import -------------------------------------------------------------------
+
+imported=0
+failed=""
+while read -r want_sha want_size destination flag; do
+    case "$want_sha" in ''|\#*) continue ;; esac
+    [ -f "$destination" ] && continue
+
+    base=$(basename "$destination")
+    if ! found=$(locate "$base" "$want_sha" "$want_size"); then
+        if [ "${flag:-}" = optional ]; then
+            log "optional, not on this firmware: $base"
+            continue
+        fi
+        log "not found on this device: $base"
+        failed="$failed $base"
+        continue
+    fi
+
+    install -d -m 755 "$(dirname "$destination")"
+    # Copy to a temporary name in the destination directory and rename, so a
+    # crash mid-copy cannot leave a truncated file that looks installed. The
+    # copy is checked against the file it came from rather than against the
+    # manifest: what is guarded here is the copy, not the revision.
+    tmp=$destination.import
+    rm -f "$tmp"
+    cp "$found" "$tmp"
+    chmod 0644 "$tmp"
+    if [ "$(sha_of "$tmp")" != "$(sha_of "$found")" ]; then
+        rm -f "$tmp"
+        log "copy did not match its source: $base"
+        failed="$failed $base"
+        continue
+    fi
+    mv -f "$tmp" "$destination"
+    log "imported $base from ${found#$source_root/}"
+    imported=$((imported + 1))
+done <"$manifest"
+
+status=0
+if [ -n "$failed" ]; then
+    status=1
+    if [ "$imported" -gt 0 ]; then
+        next="Устройство перезагружается, чтобы применить перенесённое."
+    else
+        next="Перезагрузка не выполнена: переносить было нечего."
+    fi
+    report "Прошивки перенесены не полностью" \
+"Не найдено на устройстве:$failed
+
+Перенесено: $imported. $next
+Подробности: journalctl -u chiron-firmware-import"
+elif [ "$imported" -gt 0 ]; then
+    report "Прошивки перенесены" \
+"Перенесено файлов: $imported. Устройство перезагружается."
+fi
+
+# --no-block: this unit is part of the running boot transaction, and a blocking
+# reboot request from inside it would wait on the very job that is asking.
+[ "$imported" -eq 0 ] || systemctl --no-block reboot
+exit "$status"

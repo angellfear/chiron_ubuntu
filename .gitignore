@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Local operational policy and private provisioning are never tracked.
+/AGENTS.md
+/private/
+/local/
+
+# Upstream repositories are separate checkouts, never vendored or submodules.
+/sources/
+/upstream/
+
+# The assembled image, kept locally for flashing: the four boot artifacts, the
+# manifest that names the build they came from, and the boot menu that loads
+# them. Git tracks what makes an image, never an image.
+/image/
+
+# Test work and generated artifacts are disposable and never tracked.
+/work/
+/out/
+/artifacts-*/
+/cache/
+/logs/
+/scratch/
+/patches/testing/
+/patches/candidates/
+*.img
+*.img.xz
+*.raw
+*.ext4
+*.sqfs
+*.dtb
+*.dtbo
+*.ko
+*.o
+*.a
+*.so
+*.tar
+*.tar.gz
+*.zip
+*.log
+*.rej
+*.orig
+
+# Credentials and local configuration.
+*.env
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+*.secret
+*.credentials
+authorized_keys
+20-w2-wifi.yaml
+
+# Editor, agent and language caches.
+.vscode/
+.idea/
+prompts/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Documentation and notes stay local: only README files and the licensing
+# statement are tracked.
+*.md
+!README.md
+!**/README.md
+!THIRD_PARTY.md
+.playwright-mcp/

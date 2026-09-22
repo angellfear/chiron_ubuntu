@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Sat, 29 Aug 2026 07:00:00 +0000
+Subject: [PATCH 1/1] himax: run the bluejay touch module on the Chiron panel
+
+Held as one delta: a single working-tree change over the pinned Google
+checkout, applied as a whole. Splitting it into per-concern patches would
+be this port's invention, so it stays whole and the concerns are named
+here instead.
+
+Axis orientation as module parameters (swap_xy, invert_x, invert_y). The
+digitiser's origin sits at the opposite corner from the panel's scanout origin,
+so both axes need reversing. Doing that in the compositor does not hold: a
+coordinate transformation matrix is recomputed from the output transform on
+every rotation, and this correction has to survive underneath that. Where the
+glass sits relative to the panel is a fixed property of the hardware, so it
+belongs in the driver, ahead of anything the display does. The parameters are
+applied to the reported coordinates, to the axis ranges announced at
+input_set_abs_params() time, and to the bounds check in himax_point_report(),
+which would otherwise drop every swapped point as out of range.
+
+Name the input device himax-touchscreen-mt. The session matches on that name
+(wayfire.ini has an [input-device:himax-touchscreen-mt] section), and the
+unpatched name is shared with the single-touch variant.
+
+Build against 5.15 without the Google panel bridge. This module is written for
+the bluejay 5.10 tree, where CONFIG_TOUCHSCREEN_PANEL_BRIDGE brings a DRM
+bridge and an AOC bus handoff that this board has no equivalent of.
+power_status moves out of that ifdef because it is read unconditionally;
+himax_ts_thread() no longer takes the bus reference when the bridge is absent;
+himax_check_panel_map() returns early on trees that predate the exported
+of_drm_find_panel(); and input_mt_init_slots() is called with INPUT_MT_DIRECT
+in both protocol variants, since the two-argument form does not exist here.
+
+Make the pinctrl states optional. The board's SPI node declares no on_state or
+off_state, and the original code tests IS_ERR() on the pinctrl handle rather
+than on the looked-up state, so a missing state was dereferenced.
+
+Unregister the input device on remove. input_free_device() leaves the evdev
+node registered with pointers into the unloaded module.
+---
+diff --git a/himax_common.c b/himax_common.c
+index 65b1357..bb1f6e2 100644
+--- a/himax_common.c
++++ b/himax_common.c
+@@ -202,6 +202,26 @@ static uint8_t Last_EN_NoiseFilter;
+ static int p_point_num = 0xFFFF;
+ static uint8_t p_stylus_num = 0xFF;
+ static int probe_fail_flag;
++static bool swap_xy;
++module_param(swap_xy, bool, 0644);
++MODULE_PARM_DESC(swap_xy, "Swap reported touchscreen X and Y axes");
++
++static bool invert_x;
++module_param(invert_x, bool, 0644);
++MODULE_PARM_DESC(invert_x, "Invert the reported touchscreen X axis");
++
++/*
++ * The digitizer's origin is at the opposite corner from the panel's scanout
++ * origin, which needs both axes reversed.  invert_x alone could not express
++ * that, and doing it in X instead would be overwritten on every rotation:
++ * xinput map-to-output recomputes the coordinate transformation matrix from
++ * the output's transform each time the display turns.  Where the glass sits
++ * relative to the panel is a fixed property of the hardware, so it belongs
++ * here, ahead of anything the display does.
++ */
++static bool invert_y;
++module_param(invert_y, bool, 0644);
++MODULE_PARM_DESC(invert_y, "Invert the reported touchscreen Y axis");
+ #if defined(HX_USB_DETECT_GLOBAL)
+ bool USB_detect_flag;
+ #endif
+@@ -951,12 +971,8 @@ int himax_input_register(struct himax_ts_data *ts)
+ 	input_set_abs_params(ts->input_dev, ABS_MT_TRACKING_ID, 1, 10, 0, 0);
+ #else
+ 	set_bit(MT_TOOL_FINGER, ts->input_dev->keybit);
+-#if defined(HX_PROTOCOL_B_3PA)
+ 	input_mt_init_slots(ts->input_dev, ts->nFinger_support,
+ 			INPUT_MT_DIRECT);
+-#else
+-	input_mt_init_slots(ts->input_dev, ts->nFinger_support);
+-#endif
+ #endif
+ 	I("input_set_abs_params: mix_x %d, max_x %d, min_y %d, max_y %d\n",
+ 			ts->pdata->abs_x_min,
+@@ -964,11 +980,13 @@ int himax_input_register(struct himax_ts_data *ts)
+ 			ts->pdata->abs_y_min,
+ 			ts->pdata->abs_y_max);
+ 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_X,
+-			ts->pdata->abs_x_min, ts->pdata->abs_x_max,
+-			ts->pdata->abs_x_fuzz, 0);
++			swap_xy ? ts->pdata->abs_y_min : ts->pdata->abs_x_min,
++			swap_xy ? ts->pdata->abs_y_max : ts->pdata->abs_x_max,
++			swap_xy ? ts->pdata->abs_y_fuzz : ts->pdata->abs_x_fuzz, 0);
+ 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y,
+-			ts->pdata->abs_y_min, ts->pdata->abs_y_max,
+-			ts->pdata->abs_y_fuzz, 0);
++			swap_xy ? ts->pdata->abs_x_min : ts->pdata->abs_y_min,
++			swap_xy ? ts->pdata->abs_x_max : ts->pdata->abs_y_max,
++			swap_xy ? ts->pdata->abs_x_fuzz : ts->pdata->abs_y_fuzz, 0);
+ 	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR,
+ 			ts->pdata->abs_pressure_min,
+ 			ts->pdata->abs_pressure_max,
+@@ -2263,8 +2281,22 @@ skip_stylus_operation:
+ 		&& y <= ts->pdata->abs_y_max) {
+ 			hx_touch_data->finger_num--;
+ 
+-			g_target_report_data->p[i].x = x;
+-			g_target_report_data->p[i].y = y;
++			g_target_report_data->p[i].x = swap_xy ? y : x;
++			g_target_report_data->p[i].y = swap_xy ? x : y;
++			if (invert_x)
++				g_target_report_data->p[i].x =
++					(swap_xy ? ts->pdata->abs_y_max :
++					 ts->pdata->abs_x_max) +
++					(swap_xy ? ts->pdata->abs_y_min :
++					 ts->pdata->abs_x_min) -
++					g_target_report_data->p[i].x;
++			if (invert_y)
++				g_target_report_data->p[i].y =
++					(swap_xy ? ts->pdata->abs_x_max :
++					 ts->pdata->abs_y_max) +
++					(swap_xy ? ts->pdata->abs_x_min :
++					 ts->pdata->abs_y_min) -
++					g_target_report_data->p[i].y;
+ 			g_target_report_data->p[i].w = w;
+ 			g_target_report_data->p[i].id = 1;
+ 
+@@ -2402,9 +2434,11 @@ static void himax_point_report(struct himax_ts_data *ts)
+ 	}
+ 	for (i = 0; i < ts->nFinger_support; i++) {
+ 		if (g_target_report_data->p[i].x >= 0
+-		&& g_target_report_data->p[i].x <= ts->pdata->abs_x_max
++		&& g_target_report_data->p[i].x <=
++			(swap_xy ? ts->pdata->abs_y_max : ts->pdata->abs_x_max)
+ 		&& g_target_report_data->p[i].y >= 0
+-		&& g_target_report_data->p[i].y <= ts->pdata->abs_y_max)
++		&& g_target_report_data->p[i].y <=
++			(swap_xy ? ts->pdata->abs_x_max : ts->pdata->abs_y_max))
+ 			valid = true;
+ 		else
+ 			valid = false;
+@@ -3210,14 +3244,18 @@ int himax_ts_pinctrl_configure(struct himax_ts_data *ts, bool enable)
+ 	struct pinctrl_state *state;
+ 
+ 	I("%s: %s\n", __func__, enable ? "ACTIVE" : "SUSPEND");
++	if (IS_ERR_OR_NULL(ts->pdata->pinctrl)) {
++		D("%s: optional pinctrl states are not present\n", __func__);
++		return 0;
++	}
+ 
+ 	if (enable) {
+ 		state = pinctrl_lookup_state(ts->pdata->pinctrl, "on_state");
+-		if (IS_ERR(ts->pdata->pinctrl))
++		if (IS_ERR(state))
+ 			E("%s: could not get active pinstate\n", __func__);
+ 	} else {
+ 		state = pinctrl_lookup_state(ts->pdata->pinctrl, "off_state");
+-		if (IS_ERR(ts->pdata->pinctrl))
++		if (IS_ERR(state))
+ 			E("%s: could not get suspend pinstate\n", __func__);
+ 	}
+ 
+@@ -3653,7 +3691,11 @@ else
+ #if IS_ENABLED(CONFIG_TOUCHSCREEN_PANEL_BRIDGE)
+ 	unregister_panel_bridge(&ts->panel_bridge);
+ #endif
+-	input_free_device(ts->input_dev);
++	/* The device is registered during a successful probe.  input_free_device()
++	 * leaves the evdev node registered with pointers into the unloaded module.
++	 */
++	input_unregister_device(ts->input_dev);
++	ts->input_dev = NULL;
+ #if defined(HX_CONTAINER_SPEED_UP)
+ 	cancel_delayed_work_sync(&ts->ts_int_work);
+ 	destroy_workqueue(ts->ts_int_workqueue);
+diff --git a/himax_common.h b/himax_common.h
+index d333f89..8ee754d 100644
+--- a/himax_common.h
++++ b/himax_common.h
+@@ -541,8 +541,8 @@ struct himax_ts_data {
+ 	struct delayed_work work_att;
+ #endif
+ 
+-#if IS_ENABLED(CONFIG_TOUCHSCREEN_PANEL_BRIDGE)
+ 	volatile int power_status;
++#if IS_ENABLED(CONFIG_TOUCHSCREEN_PANEL_BRIDGE)
+ 	u16 bus_refmask;
+ 	struct mutex bus_mutex;
+ 	struct drm_bridge panel_bridge;
+diff --git a/himax_platform.c b/himax_platform.c
+index ab1d441..2286512 100644
+--- a/himax_platform.c
++++ b/himax_platform.c
+@@ -35,7 +35,7 @@ int himax_dev_set(struct himax_ts_data *ts)
+ 		return ret;
+ 	}
+ 
+-	ts->input_dev->name = "himax-touchscreen";
++	ts->input_dev->name = "himax-touchscreen-mt";
+ 
+ 	if (!ic_data->HX_STYLUS_FUNC)
+ 		goto skip_stylus_operation;
+@@ -148,6 +148,12 @@ int himax_ts_check_dt(struct device_node *np)
+ static int himax_check_panel_map(struct device_node *np,
+ 	struct himax_platform_data *pdata)
+ {
++#ifdef BEFORE_KERNEL_5_10
++	/* Chiron has no himax,panel_map property.  Kernel 5.4 also predates the
++	 * exported of_drm_find_panel() API used by the Google 5.10 module.
++	 */
++	return 0;
++#else
+ 	int ret = 0;
+ 	int index;
+ 	struct of_phandle_args panelmap;
+@@ -174,6 +180,7 @@ static int himax_check_panel_map(struct device_node *np,
+ 		}
+ 	}
+ 	return 0;
++#endif
+ }
+ 
+ int himax_parse_dt(struct himax_ts_data *ts, struct himax_platform_data *pdata)
+@@ -923,6 +930,7 @@ static void himax_ts_isr_func(struct himax_ts_data *ts)
+ irqreturn_t himax_ts_thread(int irq, void *ptr)
+ {
+ 	struct himax_ts_data *ts = (struct himax_ts_data *)ptr;
++#if IS_ENABLED(CONFIG_TOUCHSCREEN_PANEL_BRIDGE)
+ 	if (himax_ts_set_bus_ref(ts, HIMAX_TS_BUS_REF_IRQ, true) < 0) {
+ 		/* Interrupt during bus suspend */
+ 		I("%s: Skipping stray interrupt since bus is suspended(power_status: %d)\n",
+@@ -933,6 +941,10 @@ irqreturn_t himax_ts_thread(int irq, void *ptr)
+ 	himax_ts_isr_func((struct himax_ts_data *)ptr);
+ 
+ 	himax_ts_set_bus_ref(ts, HIMAX_TS_BUS_REF_IRQ, false);
++#else
++	/* The Chiron display path has no Google panel bridge/AOC bus handoff. */
++	himax_ts_isr_func(ts);
++#endif
+ 
+ 	return IRQ_HANDLED;
+ }
+-- 
+2.43.0
+

@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+"""Work out the accelerometer's mount matrix from three reference positions.
+
+The result is the standard IIO `mount-matrix` device-tree property, which is
+where placement belongs: once it is in the DT every consumer gets correctly
+oriented samples, iio-sensor-proxy included, and nothing downstream needs to
+know how this particular sensor happens to be soldered.
+
+The vendor DT describes placement with its own `orient` index instead, which no
+mainline component reads, so it has to be measured once.
+
+Three positions are enough because each one pins one row of the matrix:
+
+  1. upright, portrait, top of the screen up   -> device frame (0, 1, 0)
+  2. upright, turned 90 deg clockwise          -> device frame (-1, 0, 0)
+  3. lying flat, screen facing up              -> device frame (0, 0, 1)
+
+Device frame is the usual one: +X towards the right edge of the screen, +Y
+towards the top edge, +Z out of the screen towards the viewer.  At rest an
+accelerometer reports proper acceleration, so the axis pointing away from the
+earth reads +1 g -- that is why "screen up" expects +Z and not -Z.
+
+The first two have to be genuinely upright: lying back on a stand puts most of
+gravity on Z and leaves too little in the screen plane to measure.
+"""
+import glob
+import os
+import sys
+import time
+
+POSITIONS = [
+    ("Поставьте вертикально, портрет (1200 в ширину), верх экрана вверх",
+     (0.0, 1.0, 0.0)),
+    ("Не меняя наклона, поверните на 90° по часовой стрелке (левый край экрана вверх)",
+     (-1.0, 0.0, 0.0)),
+    ("Положите плашмя, экраном вверх",
+     (0.0, 0.0, 1.0)),
+]
+
+SAMPLES = 20
+SAMPLE_DELAY = 0.05
+
+
+def find_sensor():
+    for path in sorted(glob.glob("/sys/bus/iio/devices/iio:device*")):
+        try:
+            with open(os.path.join(path, "name")) as handle:
+                if handle.read().strip() == "sc7a20e":
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+def read_average(sensor, scale):
+    total = [0.0, 0.0, 0.0]
+    for _ in range(SAMPLES):
+        for index, axis in enumerate("xyz"):
+            with open(os.path.join(sensor, f"in_accel_{axis}_raw")) as handle:
+                total[index] += int(handle.read().strip())
+        time.sleep(SAMPLE_DELAY)
+    # IIO reports m/s^2; g is the natural unit here.
+    return [value * scale / (SAMPLES * 9.80665) for value in total]
+
+
+def inverse3(m):
+    det = (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+           - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+           + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+    if abs(det) < 1e-6:
+        raise ValueError("the three positions are not independent enough")
+    cof = [
+        [m[1][1] * m[2][2] - m[1][2] * m[2][1],
+         m[0][2] * m[2][1] - m[0][1] * m[2][2],
+         m[0][1] * m[1][2] - m[0][2] * m[1][1]],
+        [m[1][2] * m[2][0] - m[1][0] * m[2][2],
+         m[0][0] * m[2][2] - m[0][2] * m[2][0],
+         m[0][2] * m[1][0] - m[0][0] * m[1][2]],
+        [m[1][0] * m[2][1] - m[1][1] * m[2][0],
+         m[0][1] * m[2][0] - m[0][0] * m[2][1],
+         m[0][0] * m[1][1] - m[0][1] * m[1][0]],
+    ]
+    return [[cof[r][c] / det for c in range(3)] for r in range(3)]
+
+
+def matmul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)]
+
+
+def main():
+    sensor = find_sensor()
+    if not sensor:
+        print("не найден IIO-датчик sc7a20e", file=sys.stderr)
+        return 1
+    with open(os.path.join(sensor, "in_accel_scale")) as handle:
+        scale = float(handle.read().strip())
+
+    measured, expected = [], []
+    for prompt, target in POSITIONS:
+        print(f"\n{prompt}")
+        input("и нажмите Enter... ")
+        vector = read_average(sensor, scale)
+        magnitude = sum(v * v for v in vector) ** 0.5
+        print(f"  снято: x={vector[0]:+.2f} y={vector[1]:+.2f} z={vector[2]:+.2f} "
+              f"(|g|={magnitude:.2f})")
+        if not 0.8 < magnitude < 1.2:
+            print("  внимание: модуль вектора далёк от 1 g — устройство двигалось?")
+        measured.append(vector)
+        expected.append(list(target))
+
+    # Columns are the measurements, so that M * S = D and M = D * S^-1.
+    s = [[measured[col][row] for col in range(3)] for row in range(3)]
+    d = [[expected[col][row] for col in range(3)] for row in range(3)]
+
+    try:
+        matrix = matmul(d, inverse3(s))
+    except ValueError as err:
+        print(f"\nне удалось решить: {err}", file=sys.stderr)
+        return 1
+
+    rounded = [[max(-1, min(1, round(value))) for value in row] for row in matrix]
+
+    print("\nизмеренная матрица (до округления):")
+    for row in matrix:
+        print("   " + "  ".join(f"{value:+.2f}" for value in row))
+
+    worst = max(abs(matrix[r][c] - rounded[r][c])
+                for r in range(3) for c in range(3))
+    if worst > 0.35:
+        print(f"\nотклонение от целых {worst:.2f} — положения были неточные,"
+              " стоит повторить", file=sys.stderr)
+
+    print("\nmount-matrix для device tree:")
+    values = ", ".join(f'"{value}"' for row in rounded for value in row)
+    print(f"    mount-matrix = {values};")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

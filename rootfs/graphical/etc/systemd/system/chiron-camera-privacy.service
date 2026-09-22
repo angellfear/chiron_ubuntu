@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Honor the Chiron hardware camera privacy shutter
+Requires=chiron-camera-bridge.service
+# There is no chiron-input-load.service to order against here -- the switches
+# device comes from gpio-keys in the board device tree and exists before
+# userspace starts -- so the ordering is dropped rather than pointed at a
+# unit that will never appear.
+After=chiron-camera-bridge.service
+# The ISP runtime is installed on the board by chiron-vendor-fetch, not
+# shipped in the image; until it has arrived there is no camera to publish.
+ConditionPathExists=/usr/lib/chiron-camera/ispService
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/chiron-camera/chiron-camera-privacy
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

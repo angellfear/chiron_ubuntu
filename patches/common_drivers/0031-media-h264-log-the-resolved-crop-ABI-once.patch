@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 31/44] media: h264: log the resolved crop ABI once
+
+Validated on this board.
+---
+ .../frame_provider/decoder_v4l/h264_multi/vmh264.c           | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+index 3b454cefa..7e9ddd331 100644
+--- a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
++++ b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+@@ -10176,6 +10176,11 @@ static int vmh264_get_ps_info(struct vdec_h264_hw_s *hw,
+ 	}
+ 
+ 	/* T7C crop ABI: exported stream info uses packed pixel totals. */
++	pr_info_once("[h264] crop ABI: t7=%d t7c=%d slots=%u/%u/%u/%u\n",
++		is_cpu_t7(), is_cpu_t7c(),
++		hw->dpb.frame_crop_left_offset,
++		hw->dpb.frame_crop_right_offset,
++		hw->dpb.frame_crop_top_offset, hw->dpb.frame_crop_bottom_offset);
+ 	if (is_cpu_t7() || is_cpu_t7c()) {
+ 		crop_right = hw->dpb.frame_crop_left_offset;
+ 		crop_bottom = hw->dpb.frame_crop_right_offset;

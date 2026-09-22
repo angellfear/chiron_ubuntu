@@ -1,0 +1,53 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Keep wf-panel running for the session.
+#
+# The archive wf-panel (wf-shell 0.10) aborts intermittently in
+# cairo_surface_reference, right after
+#
+#   gdkwindow-wayland.c: buffer_release_callback:
+#       runtime check failed: (impl->staging_cairo_surface != cairo_surface)
+#
+# i.e. wayfire hands GTK a wl_buffer.release for a surface buffer GTK has
+# already recycled, and GTK then references a freed cairo surface. It is a
+# compositor/GTK buffer-lifecycle race on the panel's output, not a fault in
+# anything Chiron ships; the loudest trigger is a fullscreen layer surface
+# mapping and unmapping on that output, which is why chiron-privacy's idle
+# clock now parks its surface instead of unmapping it. This wrapper is the
+# other half: a panel crash should cost a redraw, not the whole panel for the
+# rest of the session.
+#
+# On respawn the tray repopulates on its own -- wf-panel takes the
+# StatusNotifierWatcher name again and chiron-privacy and blueman re-register
+# their items when they see it reappear.
+#
+# Bounded: a panel that runs and then dies is recovered indefinitely; one that
+# exits immediately over and over is broken, and hammering it just burns the
+# board, so give up after a run of fast exits and leave the desktop without a
+# panel rather than in a spin.
+set -eu
+
+child=
+trap 'kill "$child" 2>/dev/null || true; exit 0' TERM INT
+
+fast_exits=0
+while :; do
+    started=$(date +%s)
+    wf-panel &
+    child=$!
+    wait "$child" || true
+    child=
+    ran=$(( $(date +%s) - started ))
+
+    if [ "$ran" -ge 20 ]; then
+        fast_exits=0
+    else
+        fast_exits=$((fast_exits + 1))
+        if [ "$fast_exits" -ge 10 ]; then
+            echo "chiron-panel: wf-panel keeps exiting immediately; giving up" >&2
+            exit 1
+        fi
+    fi
+    sleep 2
+done

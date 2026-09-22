@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 04/44] media: osd: program the T7C OSD registers for the panel
+ path
+
+Validated on this board.
+---
+ drivers/media/osd/osd_fb.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/media/osd/osd_fb.c b/drivers/media/osd/osd_fb.c
+index d3e645277..a6d077edc 100644
+--- a/drivers/media/osd/osd_fb.c
++++ b/drivers/media/osd/osd_fb.c
+@@ -1699,12 +1699,17 @@ static void chiron_osd_geometry(struct osd_fb_dev_s *fbdev)
+ 	fbdev->osd_ctl.disp_start_y = 0;
+ 	fbdev->osd_ctl.disp_end_x = 1199;
+ 	fbdev->osd_ctl.disp_end_y = 1919;
++	/* Reapply the four MIF facts lost by the vendor fb path. */
++	osd_hw.color_info[DEV_OSD0] = NULL;
+ 	osd_set_color_mode(DEV_OSD0,
+ 			   &default_color_format_array[COLOR_INDEX_32_ARGB]);
+ 	osd_set_window_axis_hw(DEV_OSD0, 0, 0, 1199, 1919);
+ 	osd_set_free_scale_axis_hw(DEV_OSD0, 0, 0, 1199, 1919);
+ 	osd_set_free_scale_enable_hw(DEV_OSD0, 0x10001);
+ 	osd_enable_hw(DEV_OSD0, 1);
++	osd_reg_set_mask(VIU_OSD1_CTRL_STAT, 1 << 2);
++	osd_reg_write(VIU_OSD1_BLK1_CFG_W4, fbdev->fb_mem_paddr >> 4);
++	osd_reg_write(VIU_OSD1_BLK2_CFG_W4, 0x130);
+ 	/* Debian has no usable RDMA completion source for this display path. */
+ 	walk_through_update_list();
+ 	osd_reg_write(VPP_POSTBLEND_H_SIZE, 0x078004b0);

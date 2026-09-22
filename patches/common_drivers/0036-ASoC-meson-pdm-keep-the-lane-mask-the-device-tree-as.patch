@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 36/44] ASoC: meson: pdm: keep the lane mask the device tree
+ asks for
+
+The vendor probe overwrote the parsed lane-mask-in with a hardcoded 0x8,
+so only one of the four PDM lanes was ever sampled no matter what the board
+described. Drop the override and use all the lanes the board wires up.
+
+Validated on
+this board.
+---
+ sound/soc/amlogic/auge/pdm.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/sound/soc/amlogic/auge/pdm.c b/sound/soc/amlogic/auge/pdm.c
+index 9a93f0e03..25cb40df8 100644
+--- a/sound/soc/amlogic/auge/pdm.c
++++ b/sound/soc/amlogic/auge/pdm.c
+@@ -1288,9 +1288,6 @@ static int aml_pdm_platform_probe(struct platform_device *pdev)
+ 		p_pdm->lane_mask_in = 0xf;
+ 	}
+ 
+-	/* lane-mask-in: 0xf=all line, 0x8=4 line, 0x1=1 line */
+-	p_pdm->lane_mask_in = 0x8;
+-
+ 	ret = of_property_read_u32(node, "filter_mode", &p_pdm->lpf_filter_mode);
+ 	if (ret < 0) {
+ 		/* default set 4 */

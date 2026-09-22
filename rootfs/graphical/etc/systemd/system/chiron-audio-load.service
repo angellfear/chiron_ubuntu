@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load the Chiron ASoC audio stack
+Documentation=file:/usr/local/bin/load-chiron-audio.sh
+After=local-fs.target w2-load.service chiron-codec-load.service
+Before=greetd.service sound.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=35
+ExecStart=/usr/local/bin/load-chiron-audio.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

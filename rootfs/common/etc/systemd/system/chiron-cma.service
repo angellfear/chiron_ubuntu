@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Allow the page cache to use the reserved CMA pools
+Documentation=file:/usr/local/sbin/chiron-cma
+# aml_cma is built in (CONFIG_AMLOGIC_CMA=y), so the parameter exists as soon
+# as sysfs is mounted; no ordering beyond the default sysinit.target is needed.
+# No ConditionPathExists on purpose: a missing knob means the kernel lost
+# CONFIG_AMLOGIC_CMA, which is a fault to report rather than skip.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-cma
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

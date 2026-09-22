@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Sun, 30 Aug 2026 07:30:00 +0000
+Subject: [PATCH 45/45] arm64: dts: enable Chiron CPU DVFS
+
+The CPU regulators alone are not enough to register cpufreq policies.  Carry
+over the accepted Chiron cluster bindings: connect each cluster to its fitted
+PWM rail and expose the four SoC speed-bin OPP tables to the Amlogic driver.
+
+---
+ arch/arm64/boot/dts/amlogic/chiron.dts | 69 +++++++++++++++++++++++++++
+ 1 file changed, 69 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -1978,6 +1978,75 @@
+ 	status = "okay";
+ };
+ 
++/*
++ * CPU DVFS is board wiring, not just SoC data: each cluster needs its fitted
++ * PWM rail and the four speed-bin OPP tables.  These are the same bindings
++ * used by the accepted Chiron configuration.
++ */
++&CPU0 {
++	cpu-supply = <&vddcpua>;
++	multi_tables_available;
++	operating-points-v2 = <&a73pwm_opp_table0>,
++		<&a73pwm_opp_table1>, <&a73pwm_opp_table2>,
++		<&a73pwm_opp_table3>;
++};
++
++&CPU1 {
++	cpu-supply = <&vddcpua>;
++	multi_tables_available;
++	operating-points-v2 = <&a73pwm_opp_table0>,
++		<&a73pwm_opp_table1>, <&a73pwm_opp_table2>,
++		<&a73pwm_opp_table3>;
++};
++
++&CPU2 {
++	cpu-supply = <&vddcpua>;
++	multi_tables_available;
++	operating-points-v2 = <&a73pwm_opp_table0>,
++		<&a73pwm_opp_table1>, <&a73pwm_opp_table2>,
++		<&a73pwm_opp_table3>;
++};
++
++&CPU3 {
++	cpu-supply = <&vddcpua>;
++	multi_tables_available;
++	operating-points-v2 = <&a73pwm_opp_table0>,
++		<&a73pwm_opp_table1>, <&a73pwm_opp_table2>,
++		<&a73pwm_opp_table3>;
++};
++
++&CPU4 {
++	cpu-supply = <&vddcpub>;
++	multi_tables_available;
++	operating-points-v2 = <&a53pwm_opp_table0>,
++		<&a53pwm_opp_table1>, <&a53pwm_opp_table2>,
++		<&a53pwm_opp_table3>;
++};
++
++&CPU5 {
++	cpu-supply = <&vddcpub>;
++	multi_tables_available;
++	operating-points-v2 = <&a53pwm_opp_table0>,
++		<&a53pwm_opp_table1>, <&a53pwm_opp_table2>,
++		<&a53pwm_opp_table3>;
++};
++
++&CPU6 {
++	cpu-supply = <&vddcpub>;
++	multi_tables_available;
++	operating-points-v2 = <&a53pwm_opp_table0>,
++		<&a53pwm_opp_table1>, <&a53pwm_opp_table2>,
++		<&a53pwm_opp_table3>;
++};
++
++&CPU7 {
++	cpu-supply = <&vddcpub>;
++	multi_tables_available;
++	operating-points-v2 = <&a53pwm_opp_table0>,
++		<&a53pwm_opp_table1>, <&a53pwm_opp_table2>,
++		<&a53pwm_opp_table3>;
++};
++
+ /*
+  * The CMA shrinker hands reserved CMA back under memory pressure. This
+  * board keeps it off: the display and codec pools here are sized for the

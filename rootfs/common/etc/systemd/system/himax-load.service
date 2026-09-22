@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load Himax HX83102E touchscreen
+After=local-fs.target
+# There is no chiron-input-load.service to order against here: the input
+# aggregate is named in modules-load.d and is therefore loaded during
+# sysinit, strictly before this one runs.
+Before=greetd.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=20
+ExecStart=/bin/bash /usr/local/lib/chiron/load-himax.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

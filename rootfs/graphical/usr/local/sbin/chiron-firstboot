@@ -1,0 +1,213 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Create the desktop account, and the board's own identity, the first time the
+# released image boots.
+#
+# The image ships without either. Everything the session needs from the account
+# is derived here -- group membership, the wf-shell.ini link into its config
+# dir, the name greetd autologins -- so the squashfs stays free of any user
+# data and every board gets its own home directory. The SSH host keys are here
+# for the same reason: shipped in the image they would be shared by every copy
+# of it.
+#
+# Idempotent by construction rather than by a stamp file: each step checks the
+# state it wants. A stamp would be wrong here anyway, because the rootfs is a
+# read-only squashfs under an overlay and a wiped overlay is the supported way
+# to reset a board -- after which this should run again, and does.
+
+set -eu
+
+CONF=/etc/default/chiron-firstboot
+GREETD=/etc/greetd/config.toml
+AUTOROTATE=/etc/systemd/system/chiron-autorotate.service
+
+log() { printf '[firstboot] %s\n' "$*"; }
+
+[ -r "$CONF" ] || { log "no $CONF; nothing to do"; exit 0; }
+# shellcheck source=/dev/null
+. "$CONF"
+
+USERNAME=${USERNAME:?USERNAME must be set in $CONF}
+FULLNAME=${FULLNAME:-$USERNAME}
+PASSWORD=${PASSWORD:-}
+GROUPS=${GROUPS:-sudo}
+EXPIRE_PASSWORD=${EXPIRE_PASSWORD:-0}
+
+created=0
+if id "$USERNAME" >/dev/null 2>&1; then
+    log "$USERNAME already exists"
+else
+    log "creating $USERNAME"
+    created=1
+    adduser --quiet --disabled-password --gecos "$FULLNAME,,," "$USERNAME"
+
+    if [ -n "$PASSWORD" ]; then
+        printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd
+        [ "$EXPIRE_PASSWORD" = 1 ] && passwd --expire "$USERNAME"
+    fi
+fi
+
+# SSH host keys, for the same reason the account is made here rather than
+# shipped: a published image whose every copy answers with one key lets anyone
+# holding that image impersonate any board, and the warning that should catch
+# it never fires, because the key genuinely matches. So the image carries none
+# and each board writes its own.
+#
+# openssh ships sshd-keygen.service for exactly this and it cannot be relied on
+# here twice over. Its ConditionFirstBoot=yes is never met: systemd flags a
+# first boot only when it initialises the machine id itself, and on this
+# squashfs root under an overlay it does initialise one -- the journal says so
+# -- yet leaves /run/systemd/first-boot absent. And it is ordered Before= the
+# ssh *services* but only Wants= from ssh.socket, so even when it does run it
+# is not guaranteed to finish before the socket is listening. Here it is
+# ordinary code on a path that has already happened by the time anything can
+# turn SSH on.
+if [ ! -e /etc/ssh/ssh_host_ed25519_key ]; then
+    log "generating SSH host keys"
+    ssh-keygen -A >/dev/null
+fi
+
+# A deployment can carry the user's home and settings without carrying the
+# account database.  Also handle upgrades where the account exists but an
+# older image left Desktop empty.  Seed only missing launchers so user edits
+# and removed shortcuts remain untouched.
+HOME_DIR=$(getent passwd "$USERNAME" | cut -d: -f6)
+[ -n "$HOME_DIR" ] || { log "cannot resolve home for $USERNAME"; exit 1; }
+if [ -d /etc/skel/Desktop ]; then
+    install -d -m 755 -o "$USERNAME" -g "$USERNAME" "$HOME_DIR/Desktop"
+    for launcher in /etc/skel/Desktop/*.desktop; do
+        [ -f "$launcher" ] || continue
+        name=$(basename "$launcher")
+        # The SSH shortcut is a one-way switch that deletes itself once it has
+        # been used. Seeding it again on the next boot would undo that, so it
+        # is offered only while it still has something to do.
+        if [ "$name" = chiron-ssh-enable.desktop ]; then
+            systemctl is-enabled --quiet ssh.socket 2>/dev/null && continue
+        fi
+        target="$HOME_DIR/Desktop/$name"
+        if [ ! -e "$target" ]; then
+            # Executable, because a file manager will not launch a desktop
+            # entry it has no reason to trust, and one it declines to launch
+            # opens as text instead.
+            install -m 755 -o "$USERNAME" -g "$USERNAME" "$launcher" "$target"
+            log "installed desktop launcher $name"
+        fi
+    done
+
+    # The account's own credentials, written where the person in front of the
+    # board can read them. The image publishes a default login and password --
+    # they are in the README as well -- and a board with no keyboard attached
+    # and no second machine has nowhere else to find them.
+    #
+    # Written only on the boot that created the account, which is the only
+    # moment $PASSWORD is known to be this account's password: after that the
+    # person may have changed it, and a file that confidently states the old
+    # one is worse than no file. Deleting it therefore keeps it deleted.
+    creds="$HOME_DIR/Desktop/Логин и пароль.txt"
+    if [ "$created" = 1 ] && [ -n "$PASSWORD" ]; then
+        umask 077
+        cat >"$creds" <<EOF
+Учётная запись этого устройства
+
+    Логин   $USERNAME
+    Пароль  $PASSWORD
+
+Такие же на каждой плате с этим образом, так что это не секрет.
+Смените пароль командой passwd в терминале.
+
+SSH выключен. Чтобы включить, нажмите на рабочем столе ярлык
+"Включить SSH" -- он сработает один раз и исчезнет, а SSH будет
+работать и после перезагрузки.
+EOF
+        umask 022
+        chown "$USERNAME:$USERNAME" "$creds"
+        chmod 600 "$creds"
+        log "wrote the account's credentials to the desktop"
+    fi
+    chown "$USERNAME:$USERNAME" "$HOME_DIR/Desktop"
+fi
+
+# Groups are applied on every boot, not only at creation: adding hardware to
+# the board can introduce a group the account was made too early to be in.
+# Only groups that actually exist are requested -- usermod fails the whole call
+# on the first unknown name, which would leave the account in none of them.
+want=
+for g in $(printf '%s' "$GROUPS" | tr ',' ' '); do
+    if getent group "$g" >/dev/null 2>&1; then
+        want="${want:+$want,}$g"
+    else
+        log "skipping group $g: not present on this system"
+    fi
+done
+[ -n "$want" ] && usermod -aG "$want" "$USERNAME"
+
+# Seed the session configuration into the account, as writable copies.
+#
+# Both files are read from $XDG_CONFIG_HOME: wayfire falls back to
+# ~/.config/wayfire.ini when WAYFIRE_CONFIG_FILE is unset, which is how
+# wayfire-session now leaves it, and wf-panel 0.10 reads ~/.config/wf-shell.ini
+# and nothing else. The reason for copies rather than the symlink that used to
+# stand here is wcm: it writes back to the file it read, so a link to a
+# root-owned file under /etc is a configuration the settings application can
+# display and never save. See the long note in wayfire-session.
+#
+# Seeded only when missing, and never refreshed. Refreshing would be the more
+# convenient half of the deal -- an image that changes the panel would reach
+# every board -- but it would also overwrite whatever the person changed with
+# wcm on the next boot, which is the one thing this arrangement exists to
+# allow. An image update therefore reaches a board through a wiped overlay,
+# which resets the account and brings this code back around.
+config_dir="$HOME_DIR/.config"
+install -d -m 755 -o "$USERNAME" -g "$USERNAME" "$config_dir"
+# An older image left wf-shell.ini here as a link into the read-only /etc.
+# Leaving it would mean wcm still cannot save, so replace that one specific
+# case -- but never a regular file, which is a person's settings.
+if [ -L "$config_dir/wf-shell.ini" ]; then
+    log "replacing the wf-shell.ini link with a writable copy"
+    rm -f "$config_dir/wf-shell.ini"
+fi
+for ini in wayfire.ini wf-shell.ini; do
+    if [ ! -e "$config_dir/$ini" ] && [ -f "/etc/wayfire/$ini" ]; then
+        install -m 644 -o "$USERNAME" -g "$USERNAME" \
+            "/etc/wayfire/$ini" "$config_dir/$ini"
+        log "seeded $ini into $config_dir"
+    fi
+done
+
+# The desktop's own settings, on the same terms: once, then left alone.
+#
+# All this seed carries is a wallpaper, so that a board whose hinge never moves
+# still has one -- chiron-autorotate sets it per orientation on every detent
+# change, and that is the copy that matters once the board is in use. Without
+# any of it, pcmanfm-qt draws the desktop on a plain colour.
+desktop_seed=/usr/local/share/chiron/pcmanfm-qt-settings.conf
+desktop_conf="$config_dir/pcmanfm-qt/default/settings.conf"
+if [ ! -e "$desktop_conf" ] && [ -f "$desktop_seed" ]; then
+    install -d -m 755 -o "$USERNAME" -g "$USERNAME" \
+        "$config_dir/pcmanfm-qt" "$config_dir/pcmanfm-qt/default"
+    install -m 644 -o "$USERNAME" -g "$USERNAME" \
+        "$desktop_seed" "$desktop_conf"
+    log "seeded the desktop settings into $config_dir"
+fi
+
+# greetd autologins a name that is written into its config file, so the config
+# has to follow this one rather than repeat it.
+if [ -w "$GREETD" ] && ! grep -q "^user = \"$USERNAME\"$" "$GREETD"; then
+    log "pointing greetd's initial_session at $USERNAME"
+    sed -i "0,/^user = \".*\"$/s//user = \"$USERNAME\"/" "$GREETD"
+fi
+
+# chiron-autorotate is a system service that talks to the session's compositor,
+# so it needs the runtime directory of whichever uid ended up owning it. That
+# is only knowable once the account exists.
+uid=$(id -u "$USERNAME")
+if [ -w "$AUTOROTATE" ] \
+    && ! grep -q "^Environment=XDG_RUNTIME_DIR=/run/user/$uid$" "$AUTOROTATE"; then
+    log "pointing chiron-autorotate at /run/user/$uid"
+    sed -i "s#^Environment=XDG_RUNTIME_DIR=.*#Environment=XDG_RUNTIME_DIR=/run/user/$uid#" \
+        "$AUTOROTATE"
+    systemctl daemon-reload
+fi
+
+log "done"

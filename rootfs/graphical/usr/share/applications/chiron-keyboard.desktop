@@ -1,0 +1,11 @@
+[Desktop Entry]
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+Type=Application
+Name=On-Screen Keyboard
+Comment=Show or hide the on-screen keyboard
+Exec=/usr/local/bin/chiron-keyboard toggle
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=keyboard;osk;wvkbd;

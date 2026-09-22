@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 06/44] drm/meson: bring up the vendor DRM stack behind
+ drm_stack=1
+
+Validated on this board.
+---
+ drivers/media/media_main.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/media/media_main.c b/drivers/media/media_main.c
+index 207f5b130..c421e42e4 100644
+--- a/drivers/media/media_main.c
++++ b/drivers/media/media_main.c
+@@ -23,6 +23,9 @@
+ static bool display_only;
+ module_param(display_only, bool, 0644);
+ MODULE_PARM_DESC(display_only, "Initialize only the Chiron LCD display stack");
++static bool drm_stack;
++module_param(drm_stack, bool, 0644);
++MODULE_PARM_DESC(drm_stack, "Initialize the Chiron DRM media prerequisites");
+ 
+ //#define DEBUG
+ #define call_sub_init(func) \
+@@ -95,6 +98,17 @@ static int __init media_main_init(void)
+ 		pr_debug("### %s() display-only end\n", __func__);
+ 		return 0;
+ 	}
++	if (drm_stack) {
++		call_sub_init(vpu_security_init);
++		call_sub_init(ion_device_create_init);
++		call_sub_init(ion_system_contig_heap_create_init);
++		call_sub_init(ion_system_heap_create_init);
++		call_sub_init(add_meson_cma_heap);
++		call_sub_init(amlogic_heap_secure_dma_buf_init);
++		call_sub_init(mua_init);
++		pr_debug("### %s() drm-stack end\n", __func__);
++		return 0;
++	}
+ #ifdef CONFIG_AMLOGIC_VOUT2_SERVE
+ 	call_sub_init(vout2_init_module);
+ #endif

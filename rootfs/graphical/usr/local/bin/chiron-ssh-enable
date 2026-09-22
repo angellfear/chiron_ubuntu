@@ -1,0 +1,85 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Turn the SSH server on, once, from a desktop shortcut that then removes
+# itself.
+#
+# The image ships with ssh.socket disabled and with a published account whose
+# password is written on the desktop beside this launcher. A board that answers
+# port 22 the moment it is plugged in is therefore a board anyone on that
+# network can log into before its owner has touched it, which is why the switch
+# is off. Nothing else is missing: the host keys are written on the first boot
+# by chiron-firstboot, so this is a switch and not a setup step.
+#
+# It is a one-way switch on purpose. `systemctl enable --now` makes the change
+# outlast the reboot, the shortcut is deleted, and chiron-firstboot stops
+# seeding it back once SSH is on -- so the desktop is left as it would have
+# been had SSH always been running. Turning it off again is `systemctl disable
+# --now ssh.socket`, which is a thing for whoever now has a shell.
+#
+# Two halves in one file. The desktop launcher runs it as the person logged in,
+# which is where the notification and their Desktop directory are; the actual
+# change needs root, and sudoers.d/50-chiron-ssh grants exactly this one
+# command to the sudo group without a password. Asking for a password here
+# would mean an on-screen keyboard over a modal dialog, for a password printed
+# on the same desktop.
+
+set -eu
+
+self=/usr/local/bin/chiron-ssh-enable
+launcher=chiron-ssh-enable.desktop
+
+enabled() {
+    systemctl is-enabled --quiet ssh.socket 2>/dev/null ||
+        systemctl is-active --quiet ssh.socket 2>/dev/null ||
+        systemctl is-active --quiet ssh.service 2>/dev/null
+}
+
+if [ "${1-}" = --apply ]; then
+    # Root half. ssh.socket is what openssh ships enabled on this release --
+    # ssh.service is socket-activated and is not in multi-user.target -- so the
+    # socket is both the switch and the thing that has to come back after a
+    # reboot.
+    [ "$(id -u)" = 0 ] || { echo "--apply must run as root" >&2; exit 2; }
+    if enabled; then exit 0; fi
+    systemctl enable --now ssh.socket
+    exit 0
+fi
+
+# The half that runs as the person who tapped the shortcut.
+report() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a SSH -i network-server "$1" "$2" || true
+    fi
+    printf '%s\n%s\n' "$1" "$2"
+}
+
+# Where to connect. Several addresses may be up; show them all, as the line
+# someone would actually type.
+address_lines() {
+    who=$(id -un)
+    for a in $(hostname -I 2>/dev/null); do
+        printf 'ssh %s@%s\n' "$who" "$a"
+    done
+}
+
+# HOME is whatever the file manager was started with; fall back to the
+# account database rather than abort under set -u.
+home=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
+
+if enabled; then
+    rm -f "$home/Desktop/$launcher"
+    report "SSH уже включён" "$(address_lines)"
+    exit 0
+fi
+
+if ! failure=$(sudo -n "$self" --apply 2>&1); then
+    report "Не удалось включить SSH" \
+        "${failure:-systemctl status ssh.socket}"
+    exit 1
+fi
+
+# Only now, and only because it worked: the shortcut has done its one job.
+rm -f "$home/Desktop/$launcher"
+report "SSH включён" "Работает и после перезагрузки.
+$(address_lines)"

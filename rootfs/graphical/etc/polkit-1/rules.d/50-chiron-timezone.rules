@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: 0BSD
+// Copyright (c) 2026 angellfear
+/* The timezone is the one privileged setting this appliance asks of the person
+ * using it, and it is asked from a settings window they reached by tapping the
+ * panel. Prompting there means an on-screen keyboard over a modal dialog, for a
+ * change that breaks nothing and that the same person can make again in one
+ * tap. So the local, active session's administrator sets it directly.
+ *
+ * Only the timezone. Setting the clock itself, enabling NTP and everything else
+ * polkit guards are untouched and still prompt.
+ */
+polkit.addRule(function (action, subject) {
+    if (action.id === "org.freedesktop.timedate1.set-timezone" &&
+        subject.local && subject.active && subject.isInGroup("sudo"))
+        return polkit.Result.YES;
+});

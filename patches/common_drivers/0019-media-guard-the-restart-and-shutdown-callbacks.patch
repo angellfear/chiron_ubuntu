@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 19/44] media: guard the restart and shutdown callbacks
+
+Validated on this board.
+---
+ drivers/media/vout/lcd/lcd_vout.c | 4 ++++
+ drivers/media/vrr/vrr_drv.c       | 3 +++
+ sound/soc/amlogic/auge/card.c     | 5 +++++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/drivers/media/vout/lcd/lcd_vout.c b/drivers/media/vout/lcd/lcd_vout.c
+index 8b87aaeb6..0a4ebee38 100644
+--- a/drivers/media/vout/lcd/lcd_vout.c
++++ b/drivers/media/vout/lcd/lcd_vout.c
+@@ -2358,6 +2358,10 @@ static void lcd_shutdown(struct platform_device *pdev)
+ 	if (!pdrv)
+ 		return;
+ 
++	/* Skip vendor LCD teardown during system restart. */
++	if (system_state == SYSTEM_RESTART)
++		return;
++
+ 	if (lcd_debug_print_flag & LCD_DBG_PR_NORMAL)
+ 		LCDPR("%s\n", __func__);
+ 
+diff --git a/drivers/media/vrr/vrr_drv.c b/drivers/media/vrr/vrr_drv.c
+index 4efff3190..1362a76c0 100644
+--- a/drivers/media/vrr/vrr_drv.c
++++ b/drivers/media/vrr/vrr_drv.c
+@@ -1490,6 +1490,9 @@ static void vrr_shutdown(struct platform_device *pdev)
+ {
+ 	struct aml_vrr_drv_s *vdrv = platform_get_drvdata(pdev);
+ 
++	if (system_state == SYSTEM_RESTART)
++		return;
++
+ 	if (vdrv->sw_timer_flag) {
+ 		vrr_timer_stop(vdrv);
+ 		vdrv->sw_timer_flag = 0;
+diff --git a/sound/soc/amlogic/auge/card.c b/sound/soc/amlogic/auge/card.c
+index 49adc77d3..1222e7e6a 100644
+--- a/sound/soc/amlogic/auge/card.c
++++ b/sound/soc/amlogic/auge/card.c
+@@ -18,6 +18,7 @@
+ #include <linux/string.h>
+ #include <linux/timer.h>
+ #include <linux/workqueue.h>
++#include <linux/reboot.h>
+ //#include <linux/extcon.h>
+ #include <linux/extcon-provider.h>
+ #include <sound/jack.h>
+@@ -1639,10 +1640,14 @@ static void aml_card_platform_shutdown(struct platform_device *pdev)
+ 	struct snd_soc_card *card = platform_get_drvdata(pdev);
+ 	struct aml_card_data *priv = snd_soc_card_get_drvdata(card);
+ 
++	if (system_state == SYSTEM_RESTART)
++		goto stop_thread;
++
+ 	priv->av_mute_enable = 1;
+ 	priv->spk_mute_enable = 1;
+ 	aml_card_parse_gpios(pdev->dev.of_node, priv);
+ 
++stop_thread:
+ 	if (priv->thread) {
+ 		kthread_stop(priv->thread);
+ 		priv->thread = NULL;

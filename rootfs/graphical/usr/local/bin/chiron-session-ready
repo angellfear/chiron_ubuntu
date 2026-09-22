@@ -1,0 +1,46 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Signal the system manager only when the visible Wayfire shell is usable.
+set -eu
+
+marker=/run/chiron/session-ready
+rm -f "$marker"
+
+# Blueman hands its notifications to the session daemon, pairing confirmations
+# included.  That works here because the daemon is swaync, which draws the
+# Confirm/Deny actions as buttons; a notification daemon such as mako draws
+# none, and would need a Blueman patch for this.  See
+# profiles/graphical/packages.list.
+gsettings set org.blueman.general notification-daemon true 2>/dev/null || true
+gsettings set org.blueman.general plugin-list "[]" 2>/dev/null || true
+# Board power ownership belongs to chiron-bluetooth.service.  Reassert this for
+# an existing user's dconf database as well as the image-wide schema default.
+gsettings set org.blueman.plugins.powermanager auto-power-on false \
+    2>/dev/null || true
+
+# Keep the physical-keyboard indicator aligned with Wayfire's XKB layout list.
+# The generic icon is the package default; the language icon makes the active
+# EN/RU group visible without opening its menu.
+gsettings set org.gnome.desktop.input-sources sources \
+    "[('xkb', 'us'), ('xkb', 'ru')]" 2>/dev/null || true
+gsettings set org.ayatana.indicator.keyboard language-icon-desktop true \
+    2>/dev/null || true
+
+i=0
+while [ "$i" -lt 300 ]; do
+    bus_names=$(busctl --user --no-pager list 2>/dev/null || true)
+    if printf '%s\n' "$bus_names" | grep -q 'org.freedesktop.Notifications' \
+        && printf '%s\n' "$bus_names" | grep -q 'org.freedesktop.portal.Desktop' \
+        && pgrep -u "$(id -u)" -x wf-panel >/dev/null 2>&1 \
+        && timeout 2 wayland-info >/dev/null 2>&1; then
+        : > "$marker"
+        echo "[chiron-session] graphical shell is ready"
+        exit 0
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+
+echo "[chiron-session] graphical shell readiness timed out" >&2
+exit 1

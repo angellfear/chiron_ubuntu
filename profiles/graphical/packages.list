@@ -1,0 +1,274 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Additions to profiles/base: the Wayland session and the
+# desktop it draws. Reduced to what the session itself needs.
+#
+# Two deliberate rules:
+#
+#   - no version-pinned names. A name like libavcodec60 is pinned to one
+#     release and silently stops resolving on the next one. Where a
+#     versioned library is genuinely needed it comes in as a dependency of
+#     the tool that uses it.
+#   - no build dependencies. Building wf-shell, wvkbd and cpupower-gui in
+#     the target rootfs would leave meson, ninja-build, pkg-config,
+#     libglib2.0-dev, gettext, desktop-file-utils and libdrm-dev installed
+#     in the appliance. Here those components are built in the build chroot
+#     and the dependencies are installed for that step only, so no toolchain
+#     ships.
+#
+# The wider application set -- office, browsers, the media stack, the voice
+# Python stack -- is not here yet. It is a
+# separate piece of work with its own acceptance.
+
+# Compositor and the Wayland stack itself.
+wayfire
+wf-shell
+xwayland
+wlr-randr
+wayland-utils
+
+# Login. greetd starts the session; seatd is the fallback seat provider for
+# running a compositor outside a logind session (development, recovery).
+greetd
+seatd
+
+# Mesa. The display device is card0 (meson) and rendering reaches the Mali-G52
+# through kmsro: there is no panfrost-specific package. The version comes from
+# the next release, not this one -- see etc/apt/preferences.d/mesa-stonking.
+libgl1-mesa-dri
+libegl1
+libgles2
+
+# Input and a terminal inside the session, so the board can be worked on
+# without SSH once the panel is up.
+libinput-tools
+foot
+
+# On-screen keyboard, from the archive -- no patched build. 0.15 carries the
+# layers this board needs (full, cyrillic, special, emoji, nav, and the wide
+# forms of the first and third), so the two alphabets the session's physical
+# keyboard has are both reachable on screen. Nothing raises it automatically:
+# that would take an input-method client, and /usr/local/bin/chiron-keyboard is
+# the deliberate alternative -- a panel button.
+wvkbd
+
+# Bluetooth. BlueZ is here for bluetoothd and its tools, not for btattach:
+# chiron-bluetooth loads the W2 firmware over /dev/ttyS1 and then attaches the
+# 4 Mbit/s UART to the kernel H4 driver itself, because the btattach in this
+# release never applies that speed. rfkill, which the same script power-cycles
+# the controller with, is already in the base system.
+bluez
+
+# Notifications: the org.freedesktop.Notifications D-Bus service.
+#
+# swaync rather than mako, and the reason is Bluetooth pairing. Blueman sends a
+# pairing confirmation as a notification carrying two actions and picks its own
+# dialog only when the daemon does not claim action support; mako claims it
+# (`actions` is in its GetCapabilities) but draws no buttons -- its actions are
+# reachable only through makoctl, so on a touchscreen the prompt cannot be
+# answered at all. swaync draws them as real buttons. Verified on the board by
+# sending the same notify-send -A confirm/deny to each.
+sway-notification-center
+libnotify-bin
+
+# Audio. PipeWire replaces PulseAudio wholesale; alsa-utils is how a silent
+# output is told apart from a missing card.
+pipewire
+pipewire-pulse
+pipewire-alsa
+wireplumber
+alsa-utils
+
+# The camera's equivalent of alsa-utils: v4l2-ctl is how a node that publishes
+# nothing gets diagnosed, and the camera's acceptance -- two consecutive
+# 300-frame streams from the public node -- is run with it. Without it the only
+# way to tell a working pipeline from a broken one on the device is to open a
+# browser.
+v4l-utils
+
+# The vendor GStreamer plugins are installed but nothing could exercise them:
+# the image had 110 plugins and no gst-inspect or gst-launch, so "the hardware
+# decoder works" could only ever be asserted from the presence of device nodes.
+# These are the tools that turn that into a measurement.
+gstreamer1.0-tools
+# plugins-bad carries h264parse, which is the missing link in the codec
+# acceptance chain: `filesrc ! h264parse ! v4l2h264dec` cannot be built without
+# it, so the codec check could not be repeated on the device without installing
+# a package by hand first. Nothing in normal use needs it -- the browsers talk
+# to V4L2 directly and never touch GStreamer -- so this is here for the
+# acceptance run, at ~14.7 MB unpacked plus the ~0.8 MB gstreamer1.0-plugins-extra
+# that apt pulls in behind it.
+gstreamer1.0-plugins-bad
+# The GL elements (gltestsrc, glupload, gldownload, glimagesink). The GL
+# library itself is already pulled in by plugins-bad; this adds the plugin
+# that exposes it, ~50 KB. It is also the GPU exerciser: a headless
+# `GST_GL_WINDOW=surfaceless gltestsrc ! gldownload ! fakesink` drives
+# render-to-texture and readback, which the desktop alone rarely does.
+gstreamer1.0-gl
+
+# Portals: file chooser (gtk) and screencast/screenshot (wlr). wayfire.ini
+# starts xdg-desktop-portal in the session and publishes the compositor
+# environment onto the bus for it, so without these that autostart fails on
+# every activation and the session has no file chooser or screencast.
+xdg-desktop-portal
+xdg-desktop-portal-gtk
+xdg-desktop-portal-wlr
+xdg-user-dirs
+
+# The Android volumes. chiron-prepare-android-volumes maps the read-only
+# partitions out of the Android super image with device-mapper -- dmsetup,
+# blkid, blockdev and openssl are already in the base system -- and then hides
+# the Android uids behind a permission-masking view, which is what bindfs is
+# for. Nothing else here needs it.
+bindfs
+
+# The Zigbee coordinator. Its power, reset and boot lines are driven from
+# userspace with gpioset -- there is no driver for them here -- and its host
+# module talks to /dev/ttyS3 through pyserial.
+gpiod
+python3-serial
+
+# Clipboard, screenshots and the launcher the panel menu falls back to.
+wl-clipboard
+grim
+slurp
+bemenu
+
+# Idle and output power control, in the wlroots protocols Wayfire actually
+# exposes rather than XRandR or DPMS emulation. chiron-idle drives these.
+swayidle
+wlopm
+
+# Session plumbing the base list does not carry. An authentication agent is
+# not decoration: network-manager-gnome depends on the virtual
+# `polkit-1-auth-agent`, and if nothing else provides it apt satisfies that
+# with the first alternative, gnome-shell -- which drags in mutter and a whole
+# second desktop.
+#
+# lxpolkit, and not the two obvious ones. mate-polkit 1.26 requires
+# org.gnome.SessionManager and silently fails. policykit-1-gnome was what this
+# image shipped until it was watched under a real prompt: it faults on this
+# board every single time it has to draw the dialog -- an instruction abort
+# inside its own text, `IABT (lower EL), ESR 0x82000005` -- so the agent dies
+# before anyone can type, PAM reports `conversation failed`, and every
+# privileged action comes back as a bare "permission denied" with no prompt
+# ever shown. lxpolkit registers as the session's agent and stays up; the one
+# prompt this appliance used to raise on its own, the timezone, no longer
+# reaches it at all -- see etc/polkit-1/rules.d/50-chiron-timezone.rules.
+dbus-user-session
+polkitd
+lxpolkit
+
+# nm-applet: the only thing on this desktop that lists the Wi-Fi networks in
+# range and joins one -- see the autostart entry in wayfire.ini -- and also
+# NetworkManager's secret agent, without which a WPA passphrase is never asked
+# for. nm-connection-editor comes in the same package and is reached from the
+# applet, under "Edit Connections...". NetworkManager itself is in
+# profiles/base.
+network-manager-gnome
+
+# The tray. wf-panel is the session's StatusNotifierWatcher and these are what
+# an indicator needs to register with it.
+libayatana-appindicator3-1
+gir1.2-ayatanaappindicator3-0.1
+
+# The gdk-pixbuf SVG loader. Adwaita ships its status icons as SVG and nothing
+# else, so without this GTK finds every icon file on disk and loads none of
+# them: the panel draws its network widget as a bare label and logs
+# `Failed to load icon "network-wireless-signal-excellent-symbolic"`.
+librsvg2-common
+
+# Fonts. Without them the panel and every GTK client draw boxes.
+fonts-dejavu-core
+fonts-noto-color-emoji
+
+# GTK typelibs arrive through the standard applications above. No Python
+# layer-shell desktop or custom icon client is part of this profile.
+
+# The native C fullscreen clock is an overlay-layer client. This is the
+# runtime library only; its development headers stay in the cached build
+# chroot used by build-privacy.sh.
+libgtk-layer-shell0
+
+# Standard desktop applications and controls. These are archive packages from
+# the target Resolute release; no board-specific GUI is built or installed.
+mc
+# The file manager, and this board's desktop.
+#
+# pcmanfm-qt rather than pcmanfm, and the reason is the desktop rather than the
+# file manager. Nothing in this session draws icons on the desktop or answers a
+# right click on it, because the GTK pcmanfm can only do that on X11 -- its
+# `pcmanfm --desktop-pref` menu entry answers "Desktop manager is not active"
+# on this image and always will. pcmanfm-qt 2.3 does it on Wayland, as a
+# layer-shell client (it depends on liblayershellqtinterface6), and brings its
+# own working Desktop Preferences with it.
+#
+# It replaces pcmanfm instead of standing beside it: two file managers for one
+# board is how you get files opening in whichever one won the mimetype race.
+#
+# The cost is Qt6 in an otherwise GTK image -- libqt6core/gui/widgets, the
+# Wayland platform plugin and LayerShellQt, about 20 MB. That is spent once:
+# the same stack is what a Qt application on this board would need.
+pcmanfm-qt
+
+# The Qt Wayland shell integration, named because this image installs with
+# --no-install-recommends and qt6-wayland is only a Recommends of the Qt
+# platform plugin. Without it pcmanfm-qt has the wayland plugin and no shell to
+# talk to it with, and dies on startup:
+#
+#     qt.qpa.wayland: Attempted to load the following shells
+#         QList("xdg-shell", "wl-shell", "ivi-shell", "qt-shell")
+#     qt.qpa.plugin: Could not load the Qt platform plugin "wayland" in ""
+#         even though it was found.
+#
+# Found by installing pcmanfm-qt on the board by hand before spending an image
+# build on it. It is what provides libxdg-shell.so in
+# qt6/plugins/wayland-shell-integration, and any other Qt application on this
+# board will want it too.
+qt6-wayland
+
+# A text editor, because the desktop had none. A .txt on it -- the file with
+# this board's own login and password among them -- opened in nothing at all,
+# and the file manager had no application to offer for it.
+#
+# featherpad rather than one of the GTK editors because Qt6 is already here for
+# pcmanfm-qt: it adds libqt6printsupport6 and libhunspell and nothing else,
+# where mousepad would bring gtksourceview and gedit a good deal more. It
+# registers itself as a handler for text/plain, which is what makes a double
+# click on such a file open something.
+featherpad
+
+# An archiver, because the crash-evidence collector leaves
+# crash_dump_<date>_<time>.tar.gz files on the desktop, and nothing on this
+# board could open one: no handler for application/x-compressed-tar, so a
+# tap opened nothing and the file manager had nothing to offer.
+#
+# lxqt-archiver for the GUI, on the same terms as featherpad -- Qt6 is
+# already here for pcmanfm-qt -- and it registers the archive mimetypes,
+# which is what makes a tap on a dump open it. 7zip beside it because it is
+# the one archiver everyone knows on a command line, handles tar.gz among
+# everything else, and costs one binary.
+lxqt-archiver
+7zip
+
+gvfs
+gvfs-backends
+gvfs-fuse
+udisks2
+wcm
+wdisplays
+nwg-displays
+blueman
+rfkill
+libspa-0.2-bluetooth
+cpupower-gui
+pavucontrol
+brightnessctl
+
+# The Ubuntu archive exposes snap transition packages for these names. The
+# target-release Armbian `resolute-desktop` source (configured in the common
+# apt overlay) supplies the real arm64 browser debs instead; no snap runtime
+# or second desktop is needed.
+firefox
+chromium
+chromium-sandbox

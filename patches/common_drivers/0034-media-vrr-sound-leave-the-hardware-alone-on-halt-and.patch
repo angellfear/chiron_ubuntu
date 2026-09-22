@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:48:06 +0000
+Subject: [PATCH 34/44] media: vrr, sound: leave the hardware alone on halt and
+ power-off too
+
+The vendor shutdown callbacks only skipped their teardown when the machine
+was restarting. On halt and power-off they still tried to talk to hardware
+whose clocks the same shutdown sequence had already taken away, which is
+where the board was seen to hang instead of powering down.
+
+Validated on this board;
+the rest of that patch is already in this queue.
+---
+ drivers/media/vrr/vrr_drv.c   | 4 +++-
+ sound/soc/amlogic/auge/card.c | 4 +++-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/vrr/vrr_drv.c b/drivers/media/vrr/vrr_drv.c
+index 1362a76c0..6cb65be3d 100644
+--- a/drivers/media/vrr/vrr_drv.c
++++ b/drivers/media/vrr/vrr_drv.c
+@@ -1490,7 +1490,9 @@ static void vrr_shutdown(struct platform_device *pdev)
+ {
+ 	struct aml_vrr_drv_s *vdrv = platform_get_drvdata(pdev);
+ 
+-	if (system_state == SYSTEM_RESTART)
++	if (system_state == SYSTEM_HALT ||
++	    system_state == SYSTEM_POWER_OFF ||
++	    system_state == SYSTEM_RESTART)
+ 		return;
+ 
+ 	if (vdrv->sw_timer_flag) {
+diff --git a/sound/soc/amlogic/auge/card.c b/sound/soc/amlogic/auge/card.c
+index 1222e7e6a..58a8e7ddd 100644
+--- a/sound/soc/amlogic/auge/card.c
++++ b/sound/soc/amlogic/auge/card.c
+@@ -1640,7 +1640,9 @@ static void aml_card_platform_shutdown(struct platform_device *pdev)
+ 	struct snd_soc_card *card = platform_get_drvdata(pdev);
+ 	struct aml_card_data *priv = snd_soc_card_get_drvdata(card);
+ 
+-	if (system_state == SYSTEM_RESTART)
++	if (system_state == SYSTEM_HALT ||
++	    system_state == SYSTEM_POWER_OFF ||
++	    system_state == SYSTEM_RESTART)
+ 		goto stop_thread;
+ 
+ 	priv->av_mute_enable = 1;

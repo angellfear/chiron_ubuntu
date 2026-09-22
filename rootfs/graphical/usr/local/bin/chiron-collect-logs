@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# The desktop half of the evidence collector.
+#
+# The evidence set needs root -- journald of every boot, dmesg, the pstore
+# archive -- so this launcher collects nothing itself. sudoers.d/50-chiron-
+# evidence grants exactly `chiron-evidence --manual` to the sudo group without
+# a password, which is the same trade 50-chiron-ssh makes for the same
+# reason: the shortcut is tapped on a touchscreen, and asking for a password
+# there means an on-screen keyboard over a modal dialog for a command the
+# tapper could already run by hand. The root half writes its archive onto
+# this account's Desktop and prints the path; the path becomes the
+# notification.
+
+set -eu
+
+notify() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a Логи -i utilities-log-viewer "$1" "$2" || true
+    fi
+    printf '%s\n%s\n' "$1" "$2"
+}
+
+archive=$(sudo -n /usr/local/sbin/chiron-evidence --manual) || {
+    notify "Не удалось собрать логи" \
+        "sudo -n /usr/local/sbin/chiron-evidence --manual"
+    exit 1
+}
+
+notify "Логи собраны" "Архив на рабочем столе:
+$archive"

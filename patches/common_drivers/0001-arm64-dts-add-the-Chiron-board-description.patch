@@ -1,0 +1,2805 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 18:45:04 +0000
+Subject: [PATCH 01/44] arm64: dts: add the Chiron board description
+
+Chiron is a Yandex A311D2/T7C appliance. The board file includes the locked
+SoC dtsi and describes only what this board has: eMMC, the W2 SDIO Wi-Fi with
+its power regulator, the MIPI panel and its backlight, and the DRM topology
+that drives that panel. Another board dts is never included: the VIM4N file
+enables an SD controller whose pins are this board Wi-Fi host wake and power
+enable.
+
+Every value is carried over from the hardware-accepted Chiron device
+tree, including the reserved-memory layout. codec_mm_cma matters beyond
+codecs: the display allocates its scanout buffer from the heap-codecmm
+dma-heap, which is backed by that pool and must be physically contiguous.
+
+The panel description is split out because it is long: three HX83102E panels
+with identical timing and different init sequences, selected by panel_type on
+the command line.
+
+(cherry picked from commit 4c7dbac6983a90d4b8fffdc253a03ec6418998ca)
+---
+ arch/arm64/boot/dts/amlogic/Makefile          |   1 +
+ arch/arm64/boot/dts/amlogic/chiron-drm.dtsi   | 107 ++++
+ arch/arm64/boot/dts/amlogic/chiron-panel.dtsi | 457 ++++++++++++++++++
+ arch/arm64/boot/dts/amlogic/chiron.dts        | 2181 ++++++++++++++++
+ 4 files changed, 2746 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
+ create mode 100644 arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
+ create mode 100644 arch/arm64/boot/dts/amlogic/chiron.dts
+
+diff --git a/arch/arm64/boot/dts/amlogic/Makefile b/arch/arm64/boot/dts/amlogic/Makefile
+index 53f7714ae..c84b77e90 100644
+--- a/arch/arm64/boot/dts/amlogic/Makefile
++++ b/arch/arm64/boot/dts/amlogic/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++dtb-y += chiron.dtb
+ dtb-y += kvim4n.dtb
+ dtb-y += kvim4.dtb
+ dtb-y += kvim3.dtb
+diff --git a/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi b/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
+new file mode 100644
+index 000000000..96038f89e
+--- /dev/null
++++ b/arch/arm64/boot/dts/amlogic/chiron-drm.dtsi
+@@ -0,0 +1,107 @@
++/*
++ * DRM/KMS topology and the Panfrost binding for Chiron.
++ *
++ * The Amlogic KMS driver binds to the drm-subsystem node in mesont7c_drm.dtsi,
++ * which describes the full T7 output set. Chiron has exactly one output, the
++ * MIPI panel, so the HDMI, CVBS and dummy connector endpoints are left
++ * unconnected and the panel endpoint is wired to the lcd node. The topology
++ * is part of this board description rather than an overlay applied on top of
++ * the production device tree.
++ */
++
++&drm_vpu {
++	status = "okay";
++};
++
++&drm_to_hdmitx {
++	remote-endpoint = <0>;
++};
++
++&drm_to_cvbs {
++	remote-endpoint = <0>;
++};
++
++&drm_to_dummyl {
++	remote-endpoint = <0>;
++};
++
++&drm_to_lcd0 {
++	remote-endpoint = <&lcd0_to_drm>;
++};
++
++&drm_subsystem {
++	/* The panel, portrait: width, height, virtual width, virtual height,
++	 * bpp. The dtsi default describes a 1080p TV. */
++	fbdev_sizes = <1200 1920 1200 3840 32>;
++	/* Encoder masks, 0:hdmi 1:lcd 2:cvbs. Only the panel exists. */
++	crtc_masks = <1 1 1>;
++};
++
++&lcd {
++	ports {
++		port {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			lcd0_to_drm: endpoint@0 {
++				reg = <0>;
++				remote-endpoint = <&drm_to_lcd0>;
++			};
++		};
++	};
++};
++
++/*
++ * The vendor framebuffer driver and Amlogic DRM both drive the OSD hardware,
++ * and only one of them can own it. The session needs the DRM one; fbdev comes
++ * back through AMLOGIC_DRM_EMULATE_FBDEV.
++ */
++&fb {
++	status = "disabled";
++
++	/*
++	 * Disabled, but not silent: the OSD and logo code still reads these
++	 * while it takes the display over from the bootloader. Without them
++	 * the handover does not happen and the frame the ELF bootloader left
++	 * in memory stays on the panel. The geometry is this panel, not the
++	 * 1080p TV the SoC dtsi assumes, and logo_addr is where the
++	 * bootloader put that frame. All five values are the board's own,
++	 * accepted on hardware.
++	 */
++	display_size_default = <1200 1920 1200 3840 32>;
++	mem_size = <0x800000 0x1980000 0x100000 0x100000 0x100000>;
++	logo_addr = "0x20000000";
++	mem_alloc = <1>;
++	pxp_mode = <0>;
++};
++
++/*
++ * Video enhancement and video lock. The SoC dtsi leaves the tuning out, so
++ * the module comes up with none of it. These are the board's accepted
++ * values: colour management, gamma and white balance off, video lock on in
++ * mode 8 with the same limits.
++ */
++&amlvecm {
++	status = "okay";
++	gamma_en = <0>;
++	wb_en = <0>;
++	cm_en = <0>;
++	wb_sel = <0>;
++	vlock_en = <1>;
++	vlock_mode = <8>;
++	vlock_pll_m_limit = <1>;
++	vlock_line_limit = <2>;
++};
++
++/*
++ * Panfrost rather than the vendor kbase. The SoC dtsi describes the Mali as a
++ * Midgard part for the vendor driver; the upstream driver binds on the bifrost
++ * compatible and looks up its interrupts by lowercase name. The resets are the
++ * two Mali lines the vendor driver would otherwise assert itself.
++ */
++&gpu {
++	compatible = "amlogic,meson-g12a-mali", "arm,mali-bifrost";
++	dma-coherent;
++	interrupt-names = "gpu", "mmu", "job";
++	resets = <&reset RESET_MALI_CAPB3>, <&reset RESET_MALI>;
++};
+diff --git a/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi b/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
+new file mode 100644
+index 000000000..baed43910
+--- /dev/null
++++ b/arch/arm64/boot/dts/amlogic/chiron-panel.dtsi
+@@ -0,0 +1,457 @@
++/*
++ * Chiron panel, backlight and PWM description.
++ *
++ * Values are the hardware-accepted ones for this board's panel. The
++ * board ships one of three Himax HX83102E 1200x1920 MIPI panels
++ * with identical timing and different init sequences; the kernel selects one
++ * with panel_type= on the command line.
++ */
++
++&periphs_pinctrl {
++	/* Referenced by the lcd node below; the SoC dtsi defines only the "on"
++	 * variants. The panel is MIPI, so these vbyone/edp states are never
++	 * selected, but the driver requires every named state to resolve. */
++	lcd_vbyone_a_off_pins: lcd_vbyone_a_off_pin {
++		mux {
++			groups = "GPIOY_10","GPIOY_12";
++			function = "gpio_periphs";
++			input-enable;
++		};
++	};
++
++	lcd_edp_a_off_pins: lcd_edp_a_off_pin {
++		mux {
++			groups = "GPIOY_10";
++			function = "gpio_periphs";
++			input-enable;
++		};
++	};
++};
++
++/* PWM_AO_C drives the backlight; PWM_F is the second bl_pwm_conf channel. */
++&pwmao_cd {
++	status = "okay";
++};
++
++&pwm_ef {
++	status = "okay";
++};
++
++/ {
++	lcd: lcd {
++		compatible = "amlogic, lcd-t7";
++		status = "okay";
++		index = <0>;
++		mode = "tablet";
++		fr_auto_policy = <0>; /* 0=disable, 1=60/50hz, 2=60/50/48hz */
++		key_valid = <0>;
++		clocks = <&clkc CLKID_MIPI_DSI_A>,
++			 <&clkc CLKID_DSI0_PHY_GATE>,
++			 <&clkc CLKID_DSI_A_MEAS_GATE>;
++		clock-names = "dsi_host_gate", "dsi_phy_gate", "dsi_meas";
++		reg = <0x0 0xfe018000 0x0 0x60     /* combo dphy */
++			0x0 0xfe0b0000 0x0 0x10b0  /* edp_a host */
++			0x0 0xfe074000 0x0 0x400   /* mipi_dsi_a host */
++			0x0 0xfe014000 0x0 0x200   /* mipi_dsi_a phy */
++			0x0 0xfe002000 0x0 0xa0    /* reset */
++			0x0 0xfe004000 0x0 0x70>;  /* periphs */
++		interrupts = <0 197 1
++			0 194 1
++			0 82 1
++			0 282 1>;
++		interrupt-names = "vsync","vsync2","vsync3","vbyone";
++		pinctrl-names = "vbyone","vbyone_off","edp","edp_off";
++		pinctrl-0 = <&lcd_vbyone_a_pins>;
++		pinctrl-1 = <&lcd_vbyone_a_off_pins>;
++		pinctrl-2 = <&lcd_edp_a_pins>;
++		pinctrl-3 = <&lcd_edp_a_off_pins>;
++		pinctrl_version = <2>; /* for uboot */
++
++		/* power type:(0=cpu_gpio, 2=signal, 3=extern, 0xff=ending) */
++		/* power index:(gpios_index, or extern_index, 0xff=invalid) */
++		/* power value:(0=output low, 1=output high, 2=input) */
++		/* power delay:(unit in ms) */
++		lcd_cpu-gpios = <&gpio GPIOY_8 GPIO_ACTIVE_HIGH
++			&gpio GPIOY_9 GPIO_ACTIVE_HIGH
++			&gpio GPIOY_7 GPIO_ACTIVE_HIGH
++			&gpio GPIOZ_9 GPIO_ACTIVE_HIGH>;
++		lcd_cpu_gpio_names = "GPIOY_8","GPIOY_9","GPIOY_7","GPIOZ_9";
++
++		mipi_0 {
++			model_name = "HX83102E_XY_INX";
++			interface = "mipi";
++			basic_setting = <1200 1920 /* h_active, v_active */
++				1268 2184 /* h_period, v_period */
++				8 /* lcd_bits */
++				141 226>; /* screen_width, screen_height (mm) */
++			lcd_timing = <12 16 0 /* hs_width, hs_bp, hs_pol */
++				12 28 0>; /* vs_width, vs_bp, vs_pol */
++			clk_attr = <0 /* fr_adj_type (0=clk, 1=htotal, 2=vtotal) */
++				0 /* clk_ss_level */
++				1 /* clk_auto_generate */
++				166158720>; /* pixel_clk (Hz) */
++			mipi_attr = <4 /* lane_num */
++				1008 /* bit_rate_max (MHz) */
++				0 /* factor (*100, 0 = auto) */
++				1 /* operation_mode_init (0=video, 1=command) */
++				0 /* operation_mode_display (0=video, 1=command) */
++				2 /* video_mode_type (0=sync_pulse, 1=sync_event, 2=burst) */
++				1 /* clk_always_hs (0=disable, 1=enable) */
++				0>; /* phy_switch (0=auto, 1=standard, 2=slow) */
++
++			/* dsi_init: data_type, length, data... */
++			dsi_init_on = <
++				0x39 0x04 0xb9 0x83 0x10 0x2e
++				0x39 0x05 0xd1 0x37 0x0c 0xff 0x05
++				0x39 0x12 0xb1 0x10 0xfa 0xaf 0xaf 0x31 0x31 0xa2 0x44 0x58 0x38 0x38 0x38 0x38 0x22 0x21 0x15 0x00
++				0x39 0x03 0xd2 0x31 0x31
++				0x39 0x0c 0xb2 0x00 0xb0 0x47 0x80 0x00 0x26 0xe0 0x27 0x11 0x01 0x00
++				0x39 0x0c 0xb4 0x88 0x64 0x01 0x01 0x88 0x64 0x88 0x64 0x01 0x90 0x01
++				0x39 0x09 0xba 0x70 0x03 0xa8 0x83 0xf2 0x00 0xc0 0x0d
++				0x39 0x04 0xbf 0xfc 0x85 0x80
++				0x39 0x0f 0xc0 0x23 0x23 0x22 0x11 0xa2 0x17 0x00 0x80 0x00 0x00 0x08 0x00 0x63 0x63
++				0x15 0x02 0xc7 0x30
++				0x39 0x09 0xc8 0x00 0x04 0x04 0x00 0x00 0x82 0x13 0xff
++				0x15 0x02 0xcc 0x02
++				0x39 0x04 0xd0 0x07 0x04 0x05
++				0x39 0x2c 0xd3 0x00 0x00 0x00 0x00 0x3c 0x04 0x00 0x0c 0x0c 0x4b 0x40 0x44 0x4f 0x25 0x25 0x04 0x04 0x32 0x10 0x23 0x00 0x23 0x54 0x17 0xa5 0x07 0xa5 0x32 0x10 0x10 0x00 0x10 0x00 0x00 0x21 0x38 0x01 0x55 0x21 0x38 0x01 0x55 0x0f
++				0x39 0x2d 0xd5 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x27 0x26 0x25 0x24 0x1a 0x1a 0x1b 0x1b 0x0b 0x0a 0x09 0x08 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00 0x21 0x20 0x18 0x18 0x18 0x18
++				0x39 0x2d 0xd6 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x98 0x18 0x18 0x26 0x27 0x20 0x21 0x1a 0x1a 0x1b 0x1b 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 0x09 0x0a 0x0b 0x24 0x25 0x98 0x98 0x98 0x98
++				0x39 0x19 0xd8 0xaa 0xaa 0xaa 0xaa 0xaa 0xa0 0xaa 0xaa 0xaa 0xaa 0xaa 0xa0 0xaa 0xaa 0xaa 0xea 0xaa 0xa0 0xaa 0xaa 0xaa 0xea 0xaa 0xa0
++				0x39 0x2f 0xe0 0x00 0x05 0x0d 0x14 0x1b 0x2e 0x46 0x4e 0x57 0x54 0x70 0x78 0x80 0x92 0x92 0x9c 0xa5 0xb8 0xb6 0x58 0x5e 0x5f 0x5e 0x00 0x05 0x0d 0x14 0x1b 0x2e 0x46 0x4e 0x57 0x54 0x70 0x78 0x80 0x92 0x92 0x9c 0xa5 0xb8 0xb6 0x58 0x5e 0x69 0x79
++				0x39 0x05 0xe7 0x12 0x13 0x02 0x02
++				0x15 0x02 0xbd 0x01
++				0x39 0x05 0xb1 0x01 0x9b 0x01 0x31
++				0x39 0x0c 0xd3 0x01 0x00 0xf8 0x00 0x00 0x11 0x10 0x00 0x0a 0x00 0x01
++				0x39 0x0d 0xd8 0xff 0xff 0xff 0xff 0xff 0xf0 0xff 0xff 0xff 0xff 0xff 0xf0
++				0x15 0x02 0xe7 0x01
++				0x15 0x02 0xbd 0x02
++				0x39 0x07 0xb4 0x4e 0x00 0x33 0x11 0x33 0x88
++				0x39 0x04 0xbf 0xf2 0x00 0x02
++				0x39 0x0d 0xd8 0xff 0xff 0xfc 0x3f 0xff 0xf0 0xff 0xff 0xfc 0x3f 0xff 0xf0
++				0x15 0x02 0xbd 0x03
++				0x39 0x19 0xd8 0xaa 0xaa 0xaa 0xaa 0xaa 0xa0 0xaa 0xaa 0xaa 0xaa 0xaa 0xa0 0xff 0xff 0xfc 0x3f 0xff 0xf0 0xff 0xff 0xfc 0x3f 0xff 0xf0
++				0x15 0x02 0xbd 0x00
++				0x15 0x02 0xe9 0xcd
++				0x15 0x02 0xbb 0x01
++				0x15 0x02 0xe9 0x00
++				0x39 0x03 0xb8 0x40 0x00
++				0x15 0x02 0xbd 0x01
++				0x15 0x02 0xb8 0x15
++				0x15 0x02 0xbd 0x00
++				0x39 0x03 0xe1 0x00 0x02
++				0x15 0x02 0xbd 0x00
++				0x05 0x01 0x11
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0x05 0x01 0x29
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0xff 0x00 /* ending */>;
++			dsi_init_off = <
++				0x05 0x01 0x28
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0x05 0x01 0x10
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0xff 0x00 /* ending */>;
++			extern_init = <0xff>;
++
++			/* power step: type, index, value, delay(ms) */
++			power_on_step = <
++				0 3 1 10  /* GPIOZ_9 high */
++				0 1 1 50  /* GPIOY_9 high */
++				0 0 1 20  /* GPIOY_8 high */
++				0 0 0 20  /* GPIOY_8 low: reset pulse */
++				0 2 1 1   /* GPIOY_7 high */
++				0 0 1 60  /* GPIOY_8 high */
++				2 0 0 0   /* signal enable */
++				0xff 0 0 0>; /* ending */
++			power_off_step = <
++				2 0 0 50  /* signal disable */
++				0 2 0 5   /* GPIOY_7 low */
++				0 0 0 10  /* GPIOY_8 low */
++				0 1 0 50  /* GPIOY_9 low */
++				0 3 0 10  /* GPIOZ_9 low */
++				0xff 0 0 0>; /* ending */
++			backlight_index = <0>;
++		};
++
++		mipi_1 {
++			model_name = "HX83102E_GX_HSD";
++			interface = "mipi";
++			basic_setting = <1200 1920 /* h_active, v_active */
++				1268 2184 /* h_period, v_period */
++				8 /* lcd_bits */
++				141 226>; /* screen_width, screen_height (mm) */
++			lcd_timing = <12 16 0 /* hs_width, hs_bp, hs_pol */
++				12 28 0>; /* vs_width, vs_bp, vs_pol */
++			clk_attr = <0 /* fr_adj_type (0=clk, 1=htotal, 2=vtotal) */
++				0 /* clk_ss_level */
++				1 /* clk_auto_generate */
++				166158720>; /* pixel_clk (Hz) */
++			mipi_attr = <4 /* lane_num */
++				1008 /* bit_rate_max (MHz) */
++				0 /* factor (*100, 0 = auto) */
++				1 /* operation_mode_init (0=video, 1=command) */
++				0 /* operation_mode_display (0=video, 1=command) */
++				2 /* video_mode_type (0=sync_pulse, 1=sync_event, 2=burst) */
++				1 /* clk_always_hs (0=disable, 1=enable) */
++				0>; /* phy_switch (0=auto, 1=standard, 2=slow) */
++
++			/* dsi_init: data_type, length, data... */
++			dsi_init_on = <
++				0x39 0x04 0xb9 0x83 0x10 0x2e
++				0x15 0x02 0xe9 0xcd
++				0x15 0x02 0xbb 0x01
++				0x15 0x02 0xe9 0x00
++				0x39 0x05 0xd1 0x67 0x0c 0xff 0x05
++				0x39 0x12 0xb1 0x10 0xfa 0xaf 0xaf 0x31 0x31 0xb1 0x6b 0x31 0x36 0x36 0x36 0x36 0x22 0x21 0x15 0x00
++				0x39 0x11 0xb2 0x00 0xb0 0x47 0x80 0x00 0x26 0xe0 0x29 0x00 0x00 0x00 0x00 0x15 0x20 0xd7 0x00
++				0x39 0x11 0xb4 0x6a 0x70 0x6a 0x70 0x6a 0x90 0x6a 0x90 0x01 0x9f 0x01 0x58 0x00 0xff 0x00 0xff
++				0x39 0x03 0xd2 0x31 0x31
++				0x39 0x08 0xbf 0xfc 0x85 0x80 0x9c 0x36 0x00 0x04
++				0x39 0x2c 0xd3 0x00 0x00 0x00 0x00 0x3c 0xe8 0x00 0x00 0x00 0x37 0x37 0x33 0x0f 0x26 0x26 0x04 0x00 0x32 0x10 0x24 0x00 0x24 0x32 0x17 0xa8 0x07 0xa8 0x32 0x10 0x08 0x00 0x00 0x00 0x00 0x2b 0x50 0xb6 0xc8 0x2c 0x4f 0xb6 0xc8 0x0f
++				0x39 0x2f 0xe0 0x00 0x0a 0x18 0x20 0x29 0x4e 0x66 0x6d 0x72 0x6c 0x82 0x84 0x85 0x91 0x8c 0x94 0x9d 0xb1 0xb0 0x57 0x5f 0x69 0x73 0x00 0x0a 0x18 0x20 0x29 0x4e 0x66 0x6d 0x72 0x6c 0x82 0x84 0x85 0x91 0x8c 0x94 0x9d 0xb1 0xb0 0x57 0x5f 0x69 0x73
++				0x15 0x02 0xbd 0x01
++				0x39 0x0b 0xcb 0x80 0x36 0x12 0x16 0xc0 0x28 0x54 0x84 0x02 0x34
++				0x39 0x0c 0xd3 0x01 0x00 0xfc 0x00 0x00 0x11 0x10 0x00 0x0a 0x00 0x01
++				0x15 0x02 0xbd 0x02
++				0x39 0x07 0xb4 0x4e 0x00 0x33 0x11 0x33 0x88
++				0x39 0x04 0xbf 0xf2 0x00 0x02
++				0x15 0x02 0xbd 0x00
++				0x39 0x0f 0xc0 0x33 0x33 0x22 0x11 0xa2 0x17 0x00 0x80 0x00 0x00 0x08 0x00 0x63 0x63
++				0x39 0x2d 0xd5 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x19 0x19 0x18 0x18 0x1a 0x1a 0x1b 0x1b 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x20 0x21 0x24 0x25 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18
++				0x39 0x2d 0xd6 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x19 0x19 0x1a 0x1a 0x1b 0x1b 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00 0x25 0x24 0x21 0x20 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18
++				0x39 0x04 0xd0 0x07 0x04 0x05
++				0x39 0x18 0xe7 0x12 0x13 0x02 0x02 0x55 0x00 0x0e 0x0e 0x00 0x26 0x29 0x72 0x1c 0x72 0x01 0x27 0x00 0x00 0x00 0x00 0x17 0x00 0x68
++				0x15 0x02 0xbd 0x01
++				0x39 0x08 0xe7 0x01 0x30 0x01 0x94 0x0d 0xb5 0x0e
++				0x15 0x02 0xbd 0x02
++				0x39 0x1d 0xe7 0xff 0x01 0xfd 0x01 0x00 0x00 0x22 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x81 0x00 0x02 0x40
++				0x15 0x02 0xbd 0x00
++				0x39 0x0d 0xd8 0xaa 0xbb 0xaa 0xaa 0xaa 0xa0 0xaa 0xbb 0xaa 0xaa 0xaa 0xa0
++				0x15 0x02 0xbd 0x02
++				0x39 0x0d 0xd8 0xff 0xfc 0x3f 0xff 0xff 0xf0 0xff 0xfc 0x3f 0xff 0xff 0xf0
++				0x15 0x02 0xbd 0x03
++				0x39 0x19 0xd8 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0
++				0x15 0x02 0xbd 0x00
++				0x15 0x02 0xcc 0x02
++				0x39 0x09 0xba 0x70 0x03 0xa8 0x83 0xf2 0x80 0xc0 0x0d
++				0x15 0x02 0xbd 0x03
++				0x15 0x02 0xb2 0x80
++				0x15 0x02 0xbd 0x00
++				0x39 0x07 0xc8 0x00 0x04 0x04 0x00 0x00 0x82
++				0x15 0x02 0xbd 0x00
++				0x39 0x06 0xcb 0x00 0x13 0x08 0x02 0x25
++				0x15 0x02 0xbd 0x02
++				0x39 0x06 0xcb 0x00 0x03 0x00 0x01 0x7e
++				0x15 0x02 0xbd 0x00
++				0x39 0x08 0xc7 0x30 0xb0 0xc2 0x08 0x10 0x42 0x04
++				0x39 0x03 0xe1 0x00 0x07
++				0x39 0x04 0xb9 0x00 0x00 0x00
++				0x05 0x01 0x11
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0x05 0x01 0x29
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0xff 0x00 /* ending */>;
++			dsi_init_off = <
++				0x05 0x01 0x28
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0x05 0x01 0x10
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0xff 0x00 /* ending */>;
++			extern_init = <0xff>;
++
++			/* power step: type, index, value, delay(ms) */
++			power_on_step = <
++				0 3 1 10  /* GPIOZ_9 high */
++				0 1 1 50  /* GPIOY_9 high */
++				0 0 1 20  /* GPIOY_8 high */
++				0 0 0 20  /* GPIOY_8 low: reset pulse */
++				0 2 1 1   /* GPIOY_7 high */
++				0 0 1 60  /* GPIOY_8 high */
++				2 0 0 0   /* signal enable */
++				0xff 0 0 0>; /* ending */
++			power_off_step = <
++				2 0 0 50  /* signal disable */
++				0 2 0 5   /* GPIOY_7 low */
++				0 0 0 10  /* GPIOY_8 low */
++				0 1 0 50  /* GPIOY_9 low */
++				0 3 0 10  /* GPIOZ_9 low */
++				0xff 0 0 0>; /* ending */
++			backlight_index = <0>;
++		};
++
++		mipi_2 {
++			model_name = "HX83102E_XY_HSD";
++			interface = "mipi";
++			basic_setting = <1200 1920 /* h_active, v_active */
++				1268 2184 /* h_period, v_period */
++				8 /* lcd_bits */
++				141 226>; /* screen_width, screen_height (mm) */
++			lcd_timing = <12 16 0 /* hs_width, hs_bp, hs_pol */
++				12 28 0>; /* vs_width, vs_bp, vs_pol */
++			clk_attr = <0 /* fr_adj_type (0=clk, 1=htotal, 2=vtotal) */
++				0 /* clk_ss_level */
++				1 /* clk_auto_generate */
++				166158720>; /* pixel_clk (Hz) */
++			mipi_attr = <4 /* lane_num */
++				1008 /* bit_rate_max (MHz) */
++				0 /* factor (*100, 0 = auto) */
++				1 /* operation_mode_init (0=video, 1=command) */
++				0 /* operation_mode_display (0=video, 1=command) */
++				2 /* video_mode_type (0=sync_pulse, 1=sync_event, 2=burst) */
++				1 /* clk_always_hs (0=disable, 1=enable) */
++				0>; /* phy_switch (0=auto, 1=standard, 2=slow) */
++
++			/* dsi_init: data_type, length, data... */
++			dsi_init_on = <
++				0x39 0x04 0xb9 0x83 0x10 0x2e
++				0x15 0x02 0xe9 0xcd
++				0x15 0x02 0xbb 0x01
++				0x15 0x02 0xe9 0x00
++				0x39 0x05 0xd1 0x67 0x0c 0xff 0x05
++				0x39 0x12 0xb1 0x10 0xfa 0xaf 0xaf 0x31 0x31 0xb1 0x6b 0x31 0x36 0x36 0x36 0x36 0x22 0x21 0x15 0x00
++				0x39 0x11 0xb2 0x00 0xb0 0x47 0x80 0x00 0x26 0xe0 0x29 0x00 0x00 0x00 0x00 0x15 0x20 0xd7 0x00
++				0x39 0x11 0xb4 0x6a 0x70 0x6a 0x70 0x6a 0x90 0x6a 0x90 0x01 0x9f 0x01 0x58 0x00 0xff 0x00 0xff
++				0x39 0x03 0xd2 0x31 0x31
++				0x39 0x08 0xbf 0xfc 0x85 0x80 0x9c 0x36 0x00 0x04
++				0x39 0x2c 0xd3 0x00 0x00 0x00 0x00 0x3c 0xe8 0x00 0x00 0x00 0x37 0x37 0x33 0x0f 0x26 0x26 0x04 0x00 0x32 0x10 0x24 0x00 0x24 0x32 0x17 0xa8 0x07 0xa8 0x32 0x10 0x08 0x00 0x00 0x00 0x00 0x2b 0x50 0xb6 0xc8 0x2c 0x4f 0xb6 0xc8 0x0f
++				0x39 0x2f 0xe0 0x00 0x09 0x14 0x20 0x2a 0x4d 0x66 0x6c 0x72 0x6c 0x80 0x81 0x82 0x8d 0x89 0x90 0x9a 0xae 0xae 0x55 0x5d 0x67 0x73 0x00 0x09 0x14 0x20 0x2a 0x4d 0x66 0x6c 0x72 0x6c 0x80 0x81 0x82 0x8d 0x89 0x90 0x9a 0xae 0xae 0x55 0x5d 0x67 0x73
++				0x15 0x02 0xbd 0x01
++				0x39 0x0b 0xcb 0x80 0x36 0x12 0x16 0xc0 0x28 0x54 0x84 0x02 0x34
++				0x39 0x0c 0xd3 0x01 0x00 0xfc 0x00 0x00 0x11 0x10 0x00 0x0a 0x00 0x01
++				0x15 0x02 0xbd 0x02
++				0x39 0x07 0xb4 0x4e 0x00 0x33 0x11 0x33 0x88
++				0x39 0x04 0xbf 0xf2 0x00 0x02
++				0x15 0x02 0xbd 0x00
++				0x39 0x0f 0xc0 0x33 0x33 0x22 0x11 0xa2 0x17 0x00 0x80 0x00 0x00 0x08 0x00 0x63 0x63
++				0x39 0x2d 0xd5 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x19 0x19 0x18 0x18 0x1a 0x1a 0x1b 0x1b 0x00 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x20 0x21 0x24 0x25 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18
++				0x39 0x2d 0xd6 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x19 0x19 0x1a 0x1a 0x1b 0x1b 0x07 0x06 0x05 0x04 0x03 0x02 0x01 0x00 0x25 0x24 0x21 0x20 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18 0x18
++				0x39 0x04 0xd0 0x07 0x04 0x05
++				0x39 0x18 0xe7 0x12 0x13 0x02 0x02 0x55 0x00 0x0e 0x0e 0x00 0x26 0x29 0x72 0x1c 0x72 0x01 0x27 0x00 0x00 0x00 0x00 0x17 0x00 0x68
++				0x15 0x02 0xbd 0x01
++				0x39 0x08 0xe7 0x01 0x30 0x01 0x94 0x0d 0xb5 0x0e
++				0x15 0x02 0xbd 0x02
++				0x39 0x1d 0xe7 0xff 0x01 0xfd 0x01 0x00 0x00 0x22 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x81 0x00 0x02 0x40
++				0x15 0x02 0xbd 0x00
++				0x39 0x0d 0xd8 0xaa 0xbb 0xaa 0xaa 0xaa 0xa0 0xaa 0xbb 0xaa 0xaa 0xaa 0xa0
++				0x15 0x02 0xbd 0x02
++				0x39 0x0d 0xd8 0xff 0xfc 0x3f 0xff 0xff 0xf0 0xff 0xfc 0x3f 0xff 0xff 0xf0
++				0x15 0x02 0xbd 0x03
++				0x39 0x19 0xd8 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0 0x00 0x2a 0xaa 0xaa 0xaa 0xa0
++				0x15 0x02 0xbd 0x00
++				0x39 0x09 0xba 0x70 0x03 0xa8 0x83 0xf2 0x80 0xc0 0x0d
++				0x15 0x02 0xbd 0x03
++				0x15 0x02 0xb2 0x80
++				0x15 0x02 0xbd 0x00
++				0x39 0x07 0xc8 0x00 0x04 0x04 0x00 0x00 0x82
++				0x15 0x02 0xbd 0x00
++				0x39 0x06 0xcb 0x00 0x13 0x08 0x02 0x25
++				0x15 0x02 0xbd 0x02
++				0x39 0x06 0xcb 0x00 0x03 0x00 0x01 0x7e
++				0x15 0x02 0xbd 0x00
++				0x39 0x08 0xc7 0x30 0xb0 0xc2 0x08 0x10 0x42 0x04
++				0x39 0x03 0xe1 0x00 0x05
++				0x15 0x02 0xbd 0x00
++				0x15 0x02 0xcc 0x02
++				0x15 0x02 0x35 0x00
++				0x39 0x03 0x51 0x00 0x00
++				0x39 0x04 0xc9 0x00 0x0e 0x10
++				0x15 0x02 0x53 0x2c
++				0x05 0x01 0x11
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0x05 0x01 0x29
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0xff 0x00 /* ending */>;
++			dsi_init_off = <
++				0x05 0x01 0x28
++				0xfd 0x01 0x14 /* delay 20 ms */
++				0x05 0x01 0x10
++				0xfd 0x01 0x78 /* delay 120 ms */
++				0xff 0x00 /* ending */>;
++			extern_init = <0xff>;
++
++			/* power step: type, index, value, delay(ms) */
++			power_on_step = <
++				0 3 1 10  /* GPIOZ_9 high */
++				0 1 1 50  /* GPIOY_9 high */
++				0 0 1 20  /* GPIOY_8 high */
++				0 0 0 20  /* GPIOY_8 low: reset pulse */
++				0 2 1 1   /* GPIOY_7 high */
++				0 0 1 60  /* GPIOY_8 high */
++				2 0 0 0   /* signal enable */
++				0xff 0 0 0>; /* ending */
++			power_off_step = <
++				2 0 0 50  /* signal disable */
++				0 2 0 5   /* GPIOY_7 low */
++				0 0 0 10  /* GPIOY_8 low */
++				0 1 0 50  /* GPIOY_9 low */
++				0 3 0 10  /* GPIOZ_9 low */
++				0xff 0 0 0>; /* ending */
++			backlight_index = <0>;
++		};
++	};
++
++	backlight: backlight {
++		compatible = "amlogic, backlight-t7";
++		status = "okay";
++		index = <0>;
++		key_valid = <0>;
++		pinctrl-names = "pwm_on";
++		pinctrl-0 = <&pwm_ao_c_pins2>;
++		pinctrl_version = <2>; /* for uboot */
++		interrupts = <0 197 1
++			0 194 1
++			0 82 1>;
++		interrupt-names = "vsync","vsync2","vsync3";
++		bl_pwm_config = <&bl_pwm_conf>;
++		bl-gpios = <&gpio GPIOE_2 GPIO_ACTIVE_HIGH>;
++		bl_gpio_names = "GPIOE_2";
++
++		backlight_0 {
++			index = <0>;
++			bl_name = "backlight_pwm";
++			bl_level_default_uboot_kernel = <100 100>;
++			bl_level_attr = <255 1 /* level_max, level_min */
++				128 128>; /* level_mid, level_mid_mapping */
++			bl_ctrl_method = <1>; /* 1=pwm */
++			bl_power_attr = <0 /* en_gpio_index */
++				1 0 /* on_value, off_value */
++				200 200>; /* power_on_delay, power_off_delay */
++			bl_pwm_port = "PWM_AO_C";
++			bl_pwm_attr = <1 /* pwm_method */
++				30000 /* pwm_freq (Hz) */
++				100 1>; /* duty_max, duty_min */
++			bl_pwm_power = <0 0 /* pwm_gpio_index, pwm_gpio_off */
++				10 10>; /* pwm_on_delay, pwm_off_delay */
++			en_sequence_reverse = <0>;
++			pwm_pinmux_set = <12 0x100>;
++			pwm_pinmux_clr = <12 0xf00>;
++		};
++
++		backlight_1 {
++			index = <1>;
++			bl_name = "backlight_pwm";
++			bl_level_default_uboot_kernel = <100 100>;
++			bl_level_attr = <255 10
++				128 128>;
++			bl_ctrl_method = <1>;
++			bl_power_attr = <0 1 0 200 200>;
++			bl_pwm_port = "PWM_AO_C";
++			bl_pwm_attr = <0 180 100 25>;
++			bl_pwm_power = <0 0 10 10>;
++			en_sequence_reverse = <0>;
++		};
++	};
++
++	bl_pwm_conf: bl_pwm_conf {
++		pwm_channel_0 {
++			pwm_port = "PWM_AO_C";
++			pwms = <&pwmao_cd 0 30040 0>;
++		};
++
++		pwm_channel_1 {
++			pwm_port = "PWM_F";
++			pwms = <&pwm_ef 1 30040 0>;
++		};
++	};
++};
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+new file mode 100644
+index 000000000..5fe7b646b
+--- /dev/null
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -0,0 +1,2181 @@
++// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
++/*
++ * Yandex Chiron (Duo) - A311D2 / T7C.
++ *
++ * Own board file: it reuses the locked Amlogic T7C SoC description
++ * (mesont7c.dtsi) and describes only what is fitted on this board.  No other
++ * board's DTS is included.  Every board value below is taken from the
++ * validated on this board, which is the reference for
++ * this hardware.
++ *
++ * It covers the whole fitted board: boot, serial console, eMMC, the W2
++ * SDIO Wi-Fi/BT module, display, touch, audio, camera, NPU and their
++ * memory pools.
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/reset/amlogic,meson-t7-reset.h>
++#include <dt-bindings/input/linux-event-codes.h>
++#include "mesont7c.dtsi"
++#include "chiron-panel.dtsi"
++#include "mesont7c_drm.dtsi"
++#include "chiron-drm.dtsi"
++
++/ {
++	model = "Yandex Chiron";
++	compatible = "yandex,chiron", "amlogic, t7c";
++	amlogic-dt-id = "t7c_a311d2_chiron-pvt";
++	interrupt-parent = <&gic>;
++	#address-cells = <2>;
++	#size-cells = <2>;
++
++	aliases {
++		serial0 = &uart_A;
++		serial1 = &uart_C;
++		serial3 = &uart_D;
++	};
++
++	/* 3 GiB fitted; this is the accepted reservation window. */
++	memory {
++		device_type = "memory";
++		reg = <0x0 0x0 0x0 0xbf800000>;
++	};
++
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		ramoops@8400000 {
++			compatible = "ramoops";
++			reg = <0x0 0x08400000 0x0 0x00100000>;
++			record-size = <0x20000>;
++			console-size = <0x40000>;
++			ftrace-size = <0x80000>;
++			pmsg-size = <0x20000>;
++		};
++
++		/*
++		 * Plain reservation, deliberately without a recognised
++		 * compatible and without no-map, exactly as this board
++		 * requires it:
++		 *
++		 *  - "shared-dma-pool" hands these 52 MiB of secure-monitor
++		 *    memory to CMA.  Once aml_cma latches cma_enabled, page
++		 *    cache is allocated out of it, buffered reads come back
++		 *    holding foreign data, and an access the secure world
++		 *    refuses raises an asynchronous SError panic.
++		 *  - no compatible makes __reserved_mem_init_node() return
++		 *    -ENOENT, which fdt_init_reserved_mem() tolerates without
++		 *    freeing the range, so it simply stays reserved.
++		 *  - no-map must not be used: secmon.c dereferences
++		 *    __phys_to_virt(rmem->base), which needs the linear map.
++		 */
++		secmon_reserved: linux,secmon {
++			reg = <0x0 0x05000000 0x0 0x03400000>;
++		};
++
++		/*
++		 * The accepted layout reserves one 16 MiB DSP firmware window
++		 * at 0x40000000 for a single hifi4dsp node.  This kernel splits
++		 * the same window between the two hifidsp nodes it describes.
++		 */
++		dsp_fw_reserved0: linux,dsp_fw0 {
++			compatible = "amlogic, dsp";
++			size = <0x0 0x800000>;
++			reg = <0x0 0x40000000 0x0 0x800000>;
++		};
++
++		dsp_fw_reserved1: linux,dsp_fw1 {
++			compatible = "amlogic, dsp";
++			size = <0x0 0x800000>;
++			reg = <0x0 0x40800000 0x0 0x800000>;
++		};
++
++		/* DDR bandwidth monitor scratch; size only, address floating. */
++		/*
++		 * The pools below are the hardware-accepted Chiron ones,
++		 * unchanged.  codec_mm_cma is the one the
++		 * display depends on: aml_drm allocates its scanout buffer from
++		 * the "heap-codecmm" dma-heap, which is backed by this pool, and
++		 * that heap must be physically contiguous because the display
++		 * controller is given a single base address.  Without the pool
++		 * the allocation fails and the compositor exits right after the
++		 * modeset.
++		 */
++		codec_mm_cma: linux,codec_mm_cma {
++			compatible = "shared-dma-pool";
++			reusable;
++			size = <0x0 0x1b000000>;
++			alignment = <0x0 0x400000>;
++			linux,contiguous-region;
++			clear-map;
++		};
++
++		ppmgr_reserved: linux,ppmgr {
++			compatible = "shared-dma-pool";
++			size = <0x0 0x0>;
++		};
++
++		camera_cma_reserved: linux,camera_cma {
++			compatible = "shared-dma-pool";
++			reusable;
++			status = "okay";
++			size = <0x0 0x11000000>;
++			alignment = <0x0 0x400000>;
++			alloc-ranges = <0x0 0x0 0x0 0xe0000000>;
++		};
++
++		isp_cma_reserved: linux,isp_cma {
++			compatible = "shared-dma-pool";
++			reusable;
++			status = "okay";
++			size = <0x0 0x14400000>;
++			alignment = <0x0 0x400000>;
++		};
++
++		adapt_cma_reserved: linux,adapt_cma {
++			compatible = "shared-dma-pool";
++			reusable;
++			status = "okay";
++			size = <0x0 0x1800000>;
++			alignment = <0x0 0x400000>;
++		};
++
++		dmc_reserved: linux,dmc_monitor {
++			compatible = "amlogic,dmc_monitor-reserved";
++			reg = <0x0 0x0 0x0 0x80000>;
++		};
++
++		logo_reserved: linux,meson-fb {
++			compatible = "amlogic, meson-fb";
++			reg = <0x0 0x20000000 0x0 0x2000000>;
++			size = <0x0 0x2000000>;
++			alignment = <0x0 0x400000>;
++			alloc-ranges = <0x0 0x20000000 0x0 0x2000000>;
++		};
++
++		ion_cma_reserved: linux,ion-dev {
++			compatible = "shared-dma-pool";
++			reusable;
++			size = <0x0 0x9800000>;
++			alignment = <0x0 0x400000>;
++		};
++
++		ion_secure_reserved: linux,ion-secure {
++			compatible = "amlogic, ion-secure-mem";
++			no-map;
++			size = <0x0 0x0>;
++			alignment = <0x0 0x400000>;
++		};
++
++		ion_fb_reserved: linux,ion-fb {
++			compatible = "shared-dma-pool";
++			reusable;
++			size = <0x0 0x1c00000>;
++			alignment = <0x0 0x400000>;
++		};
++
++		codec_mm_reserved: linux,codec_mm_reserved {
++			compatible = "amlogic, codec-mm-reserved";
++			size = <0x0 0x0>;
++			alignment = <0x0 0x100000>;
++		};
++
++		adla_reserved: linux,adla_reserved {
++			compatible = "shared-dma-pool";
++			reusable;
++			size = <0x0 0x18000000>;
++			alignment = <0x0 0x400000>;
++		};
++	};
++
++	/*
++	 * W2 combo module supply: fixed 3.3 V rail enabled by GPIOT_10 with a
++	 * 10 ms settle, always on.  Without it the module never powers up and
++	 * no SDIO card appears.
++	 */
++
++	/* Consumers of the pools above, as this board declares them. */
++	codec_mm {
++		compatible = "amlogic, codec, mm";
++		memory-region = <&codec_mm_cma &codec_mm_reserved>;
++		dev_name = "codec_mm";
++		status = "okay";
++	};
++
++	ppmgr {
++		compatible = "amlogic, ppmgr";
++		memory-region = <&ppmgr_reserved>;
++		dev_name = "ppmgr";
++		status = "okay";
++	};
++
++	wifi_bt_regulator {
++		compatible = "regulator-fixed";
++		status = "okay";
++		regulator-name = "wifi_bt_regulator";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&gpio GPIOT_10 GPIO_ACTIVE_HIGH>;
++		startup-delay-us = <10000>;
++		enable-active-high;
++		regulator-always-on;
++	};
++};
++
++/* Serial console on UART_A, the port wired to the service connector. */
++&uart_A {
++	status = "okay";
++};
++
++/*
++ * UART_C is the W2 Bluetooth transport. The controller runs H4 at 4 Mbit/s
++ * once its firmware is loaded, which needs the hardware flow control the four
++ * uart_c pins carry; the dtsi already points this node at them. The serial1
++ * alias is what makes it /dev/ttyS1, which is the name the loader and
++ * btattach both use.
++ */
++&uart_C {
++	status = "okay";
++	uart-has-rtscts;
++};
++
++/*
++ * UART_D is the Telink Zigbee coordinator, at 115200 8N1 with no flow
++ * control. The serial3 alias is what makes it /dev/ttyS3, the name Android
++ * symlinks as /dev/zigbee_uart and the one the host software uses. Its power,
++ * reset and boot lines are GPIOH_2, GPIOH_5 and GPIOH_6; they are driven from
++ * userspace with gpiod rather than described here, because the vendor's
++ * zigbee-control driver -- which is all the vendor node is for -- is a
++ * proprietary module this kernel does not have.
++ */
++&uart_D {
++	status = "okay";
++};
++
++/* eMMC: the only fitted storage; Android, boot files and our root live here. */
++&sd_emmc_c {
++	status = "okay";
++	pinctrl-0 = <&emmc_pins>, <&emmc_ds_pins>;
++	pinctrl-1 = <&emmc_clk_gate_pins>;
++	pinctrl-names = "default", "clk-gate";
++
++	bus-width = <8>;
++	cap-mmc-highspeed;
++	mmc-ddr-1_8v;
++	mmc-hs200-1_8v;
++	mmc-hs400-1_8v;
++	max-frequency = <200000000>;
++	non-removable;
++	disable-wp;
++};
++
++/*
++ * No SD card slot on this board.  Leaving the controller enabled would also
++ * claim the C-bank pins that carry the W2 host wake and power enable.
++ */
++&sd_emmc_b {
++	status = "disabled";
++};
++
++/* SDIO: the W2 Wi-Fi module, non-removable, four bit. */
++&sd_emmc_a {
++	status = "okay";
++	pinctrl-0 = <&sdio_pins>;
++	pinctrl-1 = <&sdio_clk_gate_pins>;
++	pinctrl-names = "default", "clk-gate";
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	bus-width = <4>;
++	cap-sd-highspeed;
++	sd-uhs-sdr50;
++	sd-uhs-sdr104;
++	max-frequency = <200000000>;
++	non-removable;
++	disable-wp;
++};
++
++/*
++ * Audio, as accepted on this board.
++ *
++ * mesont7.dtsi carries only the audio bus, its clock controller, the DDR
++ * manager and an empty pinctrl node -- every TDM, PDM and SPDIF endpoint and
++ * the sound card itself are board properties and are defined here.
++ *
++ * Clock indices are kept as the numbers the accepted DTB holds rather than
++ * rewritten into CLKID_* macros. They are two headers' worth of base-plus-
++ * offset arithmetic (MCLK_BASE in amlogic,t7-audio-clk.h, CLKID_PLL_BASE in
++ * amlogic,t7-clkc.h), and a translation error there is silent: the wrong clock
++ * still probes and the path is simply dead. The names are one lookup away for
++ * anyone reading; the values are what the board is accepted with.
++ *
++ * The topology, from the sound card below:
++ *   link 0  TDM-A, dsp_b   -> dummy codec        alsaPORT-pcm
++ *   link 1  TDM-B, i2s     -> two FS2105 amps    alsaPORT-i2s     (2.1 speakers)
++ *   link 2  TDM-C, i2s in  -> ES7210 4ch ADC     alsaPORT-hwfeedback
++ *   link 3  PDM            -> dummy codec        alsaPORT-pdm     (8ch mic array)
++ *   link 4  SPDIF-A        -> dummy codec        alsaPORT-spdif
++ *   link 5  SPDIF-B        -> dummy codec        alsaPORT-spdifb
++ *
++ * The speakers are 2.1 -- a woofer plus left/right mid-high -- while the host
++ * stream stays stereo on TDM-B. PCM 0 is a dummy TDM-A endpoint only.
++ */
++
++/* Audio pin groups the SoC dtsi does not carry. */
++&periphs_pinctrl {
++	tdm_a_pin: tdm_a_pin {
++		mux {
++			groups = "tdm_sclk0", "tdm_fs0", "tdm_d0", "tdm_d1";
++			function = "tdm";
++		};
++	};
++
++	tdmout_b: tdmout_b {
++		mux {
++			groups = "tdm_sclk2", "tdm_fs2", "tdm_d10", "tdm_d11";
++			function = "tdm";
++		};
++	};
++
++	tdmout_c: tdmout_c {
++		mux {
++			groups = "mclk1", "tdm_sclk1", "tdm_fs1", "tdm_d2";
++			function = "tdm";
++		};
++	};
++
++	pdmin_pin: pdmin_pin {
++		mux {
++			groups = "pdm_dclk", "pdm_din0", "pdm_din1_m5",
++				 "pdm_din2", "pdm_din3";
++			function = "pdm";
++		};
++	};
++
++	mclk_1_pin: mclk_1_pin {
++		mux {
++			groups = "mclk1";
++			function = "mclk";
++		};
++	};
++
++	mclk_2_pin: mclk_2_pin {
++		mux {
++			groups = "mclk2";
++			function = "mclk";
++		};
++	};
++};
++
++&audiobus {
++	pinctrl_audio_board: pinctrl {
++		tdm_d4_pin: tdm_d4_pin {
++			mux {
++				groups = "tdm_d4";
++				function = "tdmouta_lane0";
++			};
++		};
++
++		tdm_d0_pin: tdm_d0_pin {
++			mux {
++				groups = "tdm_d0";
++				function = "tdmouta_lane0";
++			};
++		};
++
++		tdm_d1_pin: tdm_d1_pin {
++			mux {
++				groups = "tdm_d1";
++				function = "tdmina_lane0";
++			};
++		};
++
++		tdm_d2_pin: tdm_d2_pin {
++			mux {
++				groups = "tdm_d2";
++				function = "tdminc_lane0";
++			};
++		};
++
++		tdm_d5_pin: tdm_d5_pin {
++			mux {
++				groups = "tdm_d5";
++				function = "tdmouta_lane1";
++			};
++		};
++
++		tdma_clk_pin: tdma_clk_pin {
++			mux {
++				groups = "tdm_sclk0", "tdm_lrclk0";
++				function = "tdm_clk_outa";
++			};
++		};
++
++		tdmc_clk_pin: tdmc_clk_pin {
++			mux {
++				groups = "tdm_sclk1", "tdm_lrclk1";
++				function = "tdm_clk_outc";
++			};
++		};
++
++		tdm_d10_pin: tdm_d10_pin {
++			mux {
++				groups = "tdm_d10";
++				function = "tdmoutb_lane0";
++			};
++		};
++
++		tdm_d11_pin: tdm_d11_pin {
++			mux {
++				groups = "tdm_d11";
++				function = "tdmoutb_lane1";
++			};
++		};
++
++		tdmb_clk_pin: tdmb_clk_pin {
++			mux {
++				groups = "tdm_sclk2", "tdm_lrclk2";
++				function = "tdm_clk_outb";
++			};
++		};
++	};
++
++	tdma: tdm@0 {
++		compatible = "amlogic, t7-snd-tdma";
++		#sound-dai-cells = <0>;
++		dai-tdm-lane-slot-mask-in = <1 0 0 0>;
++		dai-tdm-lane-slot-mask-out = <1 0 0 0>;
++		dai-tdm-clk-sel = <0>;
++		clocks = <&clkaudio 0x2a>, <&clkaudio 0x41>, <&clkc 0x2d>,
++			 <&clkc 0x2f>, <&clkaudio 0x31>;
++		clock-names = "mclk", "mclk_pad", "clk_srcpll",
++			      "samesource_srcpll", "samesource_clk";
++		pinctrl-names = "tdm_pins";
++		pinctrl-0 = <&tdm_a_pin &tdm_d0_pin &tdm_d1_pin &tdma_clk_pin>;
++		status = "okay";
++	};
++
++	tdmb: tdm@1 {
++		compatible = "amlogic, t7-snd-tdmb";
++		#sound-dai-cells = <0>;
++		dai-tdm-lane-slot-mask-in = <0 0>;
++		dai-tdm-lane-slot-mask-out = <1 1>;
++		dai-tdm-clk-sel = <1>;
++		start_clk_enable = <1>;
++		/* The 2.1 amps expect the woofer on the first slot. */
++		swap_channels = <1 0 2 3 4 5 6 7>;
++		clocks = <&clkaudio 0x2b>, <&clkaudio 0x42>, <&clkc 0x2f>;
++		clock-names = "mclk", "mclk_pad", "clk_srcpll";
++		pinctrl-names = "tdm_pins";
++		pinctrl-0 = <&tdmout_b &tdm_d10_pin &tdm_d11_pin
++			     &mclk_2_pin &tdmb_clk_pin>;
++		status = "okay";
++	};
++
++	tdmc: tdm@2 {
++		compatible = "amlogic, t7-snd-tdmc";
++		#sound-dai-cells = <0>;
++		dai-tdm-lane-slot-mask-in = <1 0 0 0>;
++		dai-tdm-clk-sel = <2>;
++		clocks = <&clkaudio 0x2c>, <&clkaudio 0x41>, <&clkc 0x31>;
++		clock-names = "mclk", "mclk_pad", "clk_srcpll";
++		pinctrl-names = "tdm_pins";
++		pinctrl-0 = <&mclk_1_pin &tdmout_c &tdm_d2_pin &tdmc_clk_pin>;
++		start_clk_enable = <1>;
++		status = "okay";
++	};
++
++	/*
++	 * The eight-channel speech microphone array. All four lanes are
++	 * enabled; the vendor probe hardcodes lane_mask_in to 0x8 over
++	 * whatever the device tree says, which is what the pdm patch in the
++	 * common_drivers queue removes.
++	 */
++	pdm: pdm {
++		compatible = "amlogic, tm2-revb-snd-pdm";
++		#sound-dai-cells = <0>;
++		clocks = <&clkaudio 0x01>, <&clkc 0x07>, <&clkc 0x33>,
++			 <&clkaudio 0x35>, <&clkaudio 0x36>;
++		clock-names = "gate", "sysclk_srcpll", "dclk_srcpll",
++			      "pdm_dclk", "pdm_sysclk";
++		pinctrl-names = "pdm_pins";
++		pinctrl-0 = <&pdmin_pin>;
++		filter_mode = <1>;
++		train_sample_count = <11>;
++		status = "okay";
++	};
++
++	spdifa: spdif@0 {
++		compatible = "amlogic, tm2-revb-snd-spdif-a";
++		#sound-dai-cells = <0>;
++		clocks = <&clkc 0x2d>, <&clkc 0x09>, <&clkaudio 0x10>,
++			 <&clkaudio 0x11>, <&clkaudio 0x30>, <&clkaudio 0x31>;
++		clock-names = "sysclk", "fixed_clk", "gate_spdifin",
++			      "gate_spdifout", "clk_spdifin", "clk_spdifout";
++		interrupts = <GIC_SPI 35 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "irq_spdifin";
++		pinctrl-names = "spdif_pins", "spdif_pins_mute";
++		pinctrl-0 = <&spdifout_d>;
++		pinctrl-1 = <&spdifout_d_mute>;
++		samesource_sel = <4>;
++		clk_tuning_enable = <1>;
++		status = "okay";
++	};
++
++	spdifb: spdif@1 {
++		compatible = "amlogic, tm2-revb-snd-spdif-b";
++		#sound-dai-cells = <0>;
++		clocks = <&clkc 0x31>, <&clkaudio 0x15>, <&clkaudio 0x37>;
++		clock-names = "sysclk", "gate_spdifout", "clk_spdifout";
++		status = "okay";
++	};
++
++	extn: extn {
++		compatible = "amlogic, t7-snd-extn";
++		#sound-dai-cells = <0>;
++		interrupts = <GIC_SPI 42 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "irq_frhdmirx";
++		status = "okay";
++	};
++
++	effect: effect {
++		compatible = "amlogic, snd-effect-v4";
++		#sound-dai-cells = <0>;
++		clocks = <&clkaudio 0x16>, <&clkc 0x0b>, <&clkaudio 0x3a>;
++		clock-names = "gate", "srcpll", "eqdrc";
++		eqdrc_module = <0>;
++		lane_mask = <1>;
++		channel_mask = <0xff>;
++		status = "okay";
++	};
++
++	resample_a: resample@0 {
++		compatible = "amlogic, t5-resample-a";
++		clocks = <&clkc 0x2f>, <&clkaudio 0x2b>, <&clkaudio 0x32>;
++		clock-names = "resample_pll", "resample_src", "resample_clk";
++		resample_module = <8>;
++		status = "okay";
++	};
++
++	resample_b: resample@1 {
++		compatible = "amlogic, t5-resample-b";
++		clocks = <&clkc 0x33>, <&clkaudio 0x2f>, <&clkaudio 0x38>;
++		clock-names = "resample_pll", "resample_src", "resample_clk";
++		capture_sample_rate = <16000>;
++		status = "disabled";
++	};
++
++	vad: vad {
++		compatible = "amlogic, snd-vad";
++		#sound-dai-cells = <0>;
++		clocks = <&clkaudio 0x1b>, <&clkc 0x0b>, <&clkaudio 0x3b>;
++		clock-names = "gate", "pll", "clk";
++		interrupts = <GIC_SPI 39 IRQ_TYPE_EDGE_RISING>,
++			     <GIC_SPI 44 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "irq_wakeup", "irq_frame_sync";
++		src = <4>;
++		level = <1>;
++		status = "okay";
++	};
++};
++
++/*
++ * Loopback capture: the microphone array with a reference of what is being
++ * played, which is what an echo canceller needs. loopbacka takes the eight PDM
++ * channels plus three TDM-B slots; loopbackb is the four-channel variant and is
++ * off, as in the accepted tree.
++ */
++&audiobus {
++	loopbacka: loopback@0 {
++		compatible = "amlogic, t5-loopbacka";
++		#sound-dai-cells = <0>;
++		clocks = <&clkaudio 0x01>, <&clkc 0x07>, <&clkc 0x33>,
++			 <&clkaudio 0x35>, <&clkaudio 0x36>, <&clkc 0x2d>,
++			 <&clkaudio 0x2a>;
++		clock-names = "pdm_gate", "pdm_sysclk_srcpll",
++			      "pdm_dclk_srcpll", "pdm_dclk", "pdm_sysclk",
++			      "tdminlb_mpll", "tdminlb_mclk";
++		datain_src = <4>;
++		datain_chnum = <8>;
++		datain_chmask = <0xff>;
++		datain-lane-mask-in = <1 1 1 1>;
++		mclk-fs = <256>;
++		datalb_src = <6>;
++		datalb_chnum = <3>;
++		datalb_chmask = <0x7>;
++		datalb-lane-mask-in = <1 0 0 0>;
++		datalb-channels-mask = <1 1 1 0>;
++		datalb-slot-width = <16>;
++		status = "okay";
++	};
++
++	loopbackb: loopback@1 {
++		compatible = "amlogic, t5-loopbackb";
++		#sound-dai-cells = <0>;
++		clocks = <&clkaudio 0x01>, <&clkc 0x07>, <&clkc 0x33>,
++			 <&clkaudio 0x35>, <&clkaudio 0x36>, <&clkc 0x2d>,
++			 <&clkaudio 0x2a>;
++		clock-names = "pdm_gate", "pdm_sysclk_srcpll",
++			      "pdm_dclk_srcpll", "pdm_dclk", "pdm_sysclk",
++			      "tdminlb_mpll", "tdminlb_mclk";
++		mclk-fs = <256>;
++		datain_src = <4>;
++		datain_chnum = <4>;
++		datain_chmask = <0xf>;
++		datain-lane-mask-in = <1 0 1 0>;
++		datalb_src = <1>;
++		datalb_chnum = <2>;
++		datalb_chmask = <0x3>;
++		datalb-lane-mask-in = <1 0 0 0>;
++		status = "disabled";
++	};
++};
++
++/*
++ * ES7210: the four-channel ADC that feeds the amplifier hardware feedback path
++ * back to the SoC. 100 kHz bus, shared with the power-delivery controller and
++ * the board EEPROM.
++ */
++&i2c0 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c0_pins1>;
++	clock-frequency = <100000>;
++
++	es7210: es7210@40 {
++		compatible = "everest,es7210_4ch";
++		#sound-dai-cells = <0>;
++		reg = <0x40>;
++		status = "okay";
++	};
++};
++
++/*
++ * SC7A20E accelerometer. The panel rotation is decided from it, so the board
++ * needs the node even though nothing else on this bus is described: the RTC is
++ * unpopulated, the EEPROMs are read from Android and the MC34X9 at 0x6c is the
++ * other board variant.
++ *
++ * mount-matrix is the identity, which is the accepted setting. The
++ * vendor node carries "orient = <6>" instead -- an index into a vendor table
++ * that no mainline consumer reads -- so the placement is not described in the
++ * DT at all and the whole orientation policy lives in chiron-autorotate.
++ * Writing a real matrix here would move half of that policy into the kernel
++ * and leave the other half in userspace disagreeing with it.
++ */
++&i2c1 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c1_pins1>;
++	clock-frequency = <100000>;
++
++	sc7a20e: sc7a20e@19 {
++		compatible = "silan,sc7a20e_acc";
++		reg = <0x19>;
++		status = "okay";
++		mount-matrix = "1", "0", "0",
++			       "0", "1", "0",
++			       "0", "0", "1";
++	};
++};
++
++/*
++ * STK3B6X ambient light sensor. The interrupt line is described because it is
++ * a fact about the board; the driver polls at 2 Hz while something holds the
++ * device open and does not use it.
++ */
++&i2c4 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c4_pins1>;
++	clock-frequency = <400000>;
++
++	stk3b6x: ams_stk37660@48 {
++		compatible = "stk,stk3b6x";
++		reg = <0x48>;
++		status = "okay";
++		stk,irq-gpio = <&gpio GPIOY_13 GPIO_ACTIVE_HIGH>;
++	};
++};
++
++/*
++ * The two FS2105 speaker amplifiers. dev-index, not the I2C address, decides
++ * which is the woofer: index 0 at 0x6a, index 1 at 0x68. Each has its own
++ * shutdown line, active low.
++ */
++&i2c3 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c3_pins1>;
++	clock-frequency = <400000>;
++
++	fs2105_1: audio-codec@68 {
++		compatible = "foursemi, fs2105";
++		#sound-dai-cells = <0>;
++		reg = <0x68>;
++		fsm,sdz-gpio = <&gpio GPIOT_8 GPIO_ACTIVE_LOW>;
++		fsm,dev-index = <1>;
++	};
++
++	fs2105_0: audio-codec@6a {
++		compatible = "foursemi, fs2105";
++		#sound-dai-cells = <0>;
++		reg = <0x6a>;
++		fsm,sdz-gpio = <&gpio GPIOT_7 GPIO_ACTIVE_LOW>;
++		fsm,dev-index = <0>;
++	};
++};
++
++/*
++ * The LED ring: 48 RGB pixels driven by four AW21036 controllers on the same
++ * bus as the amplifiers. The whole ring is described here because the driver
++ * takes the pixel identity from the DT and nothing else knows it: the physical
++ * controller order is 0x37, 0x36, 0x34, 0x35, and the channels on 0x34 are
++ * scrambled relative to the other three. Both facts live in the label/reg
++ * pairs below, which is what lets userspace address a pixel by name --
++ * chiron:<colour>:ring<0..47> -- and never see an I2C address.
++ *
++ * The defaults (GCC, COL, white balance, PWM frequency and phase) are read by
++ * the driver at probe; the led_sync child of each controller is the channel
++ * that commits a frame.
++ */
++&i2c3 {
++	aw21036@34 {
++		compatible = "awinic,aw21036";
++		reg = <0x34>;
++		status = "okay";
++		#address-cells = <0x01>;
++		#size-cells = <0x00>;
++		gcc-default = <0xff>;
++		col-default = <0xff>;
++		wb-default = <0xff 0xff 0xff>;
++		pwm-freq-default = <0x00>;
++		pwm-phase-delay-default = <0x00>;
++		pwm-phase-invert-default = <0x00>;
++
++		led_sync {
++			led-sync;
++			label = "chiron:ring0-11:sync";
++			linux,default-trigger = "led_ring_fb-sync";
++		};
++
++		led0_r {
++			reg = <0x18>;
++			label = "chiron:red:ring0";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_g {
++			reg = <0x19>;
++			label = "chiron:green:ring0";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_b {
++			reg = <0x1a>;
++			label = "chiron:blue:ring0";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_r {
++			reg = <0x15>;
++			label = "chiron:red:ring1";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_g {
++			reg = <0x16>;
++			label = "chiron:green:ring1";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_b {
++			reg = <0x17>;
++			label = "chiron:blue:ring1";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_r {
++			reg = <0x12>;
++			label = "chiron:red:ring2";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_g {
++			reg = <0x13>;
++			label = "chiron:green:ring2";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_b {
++			reg = <0x14>;
++			label = "chiron:blue:ring2";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_r {
++			reg = <0x0f>;
++			label = "chiron:red:ring3";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_g {
++			reg = <0x10>;
++			label = "chiron:green:ring3";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_b {
++			reg = <0x11>;
++			label = "chiron:blue:ring3";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_r {
++			reg = <0x0c>;
++			label = "chiron:red:ring4";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_g {
++			reg = <0x0d>;
++			label = "chiron:green:ring4";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_b {
++			reg = <0x0e>;
++			label = "chiron:blue:ring4";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_r {
++			reg = <0x09>;
++			label = "chiron:red:ring5";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_g {
++			reg = <0x0a>;
++			label = "chiron:green:ring5";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_b {
++			reg = <0x0b>;
++			label = "chiron:blue:ring5";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_r {
++			reg = <0x06>;
++			label = "chiron:red:ring6";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_g {
++			reg = <0x07>;
++			label = "chiron:green:ring6";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_b {
++			reg = <0x08>;
++			label = "chiron:blue:ring6";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_r {
++			reg = <0x03>;
++			label = "chiron:red:ring7";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_g {
++			reg = <0x04>;
++			label = "chiron:green:ring7";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_b {
++			reg = <0x05>;
++			label = "chiron:blue:ring7";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_r {
++			reg = <0x00>;
++			label = "chiron:red:ring8";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_g {
++			reg = <0x01>;
++			label = "chiron:green:ring8";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_b {
++			reg = <0x02>;
++			label = "chiron:blue:ring8";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_r {
++			reg = <0x1b>;
++			label = "chiron:red:ring9";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_g {
++			reg = <0x1c>;
++			label = "chiron:green:ring9";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_b {
++			reg = <0x1d>;
++			label = "chiron:blue:ring9";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_r {
++			reg = <0x1e>;
++			label = "chiron:red:ring10";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_g {
++			reg = <0x1f>;
++			label = "chiron:green:ring10";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_b {
++			reg = <0x20>;
++			label = "chiron:blue:ring10";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_r {
++			reg = <0x21>;
++			label = "chiron:red:ring11";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_g {
++			reg = <0x22>;
++			label = "chiron:green:ring11";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_b {
++			reg = <0x23>;
++			label = "chiron:blue:ring11";
++			linux,default-trigger = "led_ring_fb";
++		};
++	};
++
++	aw21036_1@35 {
++		compatible = "awinic,aw21036";
++		reg = <0x35>;
++		status = "okay";
++		#address-cells = <0x01>;
++		#size-cells = <0x00>;
++		gcc-default = <0xff>;
++		col-default = <0xff>;
++		wb-default = <0xff 0xff 0xff>;
++		pwm-freq-default = <0x00>;
++		pwm-phase-delay-default = <0x00>;
++		pwm-phase-invert-default = <0x00>;
++
++		led_sync {
++			led-sync;
++			label = "chiron:ring12-23:sync";
++			linux,default-trigger = "led_ring_fb-sync";
++		};
++
++		led0_r {
++			reg = <0x00>;
++			label = "chiron:red:ring12";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_g {
++			reg = <0x01>;
++			label = "chiron:green:ring12";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_b {
++			reg = <0x02>;
++			label = "chiron:blue:ring12";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_r {
++			reg = <0x03>;
++			label = "chiron:red:ring13";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_g {
++			reg = <0x04>;
++			label = "chiron:green:ring13";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_b {
++			reg = <0x05>;
++			label = "chiron:blue:ring13";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_r {
++			reg = <0x06>;
++			label = "chiron:red:ring14";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_g {
++			reg = <0x07>;
++			label = "chiron:green:ring14";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_b {
++			reg = <0x08>;
++			label = "chiron:blue:ring14";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_r {
++			reg = <0x09>;
++			label = "chiron:red:ring15";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_g {
++			reg = <0x0a>;
++			label = "chiron:green:ring15";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_b {
++			reg = <0x0b>;
++			label = "chiron:blue:ring15";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_r {
++			reg = <0x0c>;
++			label = "chiron:red:ring16";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_g {
++			reg = <0x0d>;
++			label = "chiron:green:ring16";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_b {
++			reg = <0x0e>;
++			label = "chiron:blue:ring16";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_r {
++			reg = <0x0f>;
++			label = "chiron:red:ring17";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_g {
++			reg = <0x10>;
++			label = "chiron:green:ring17";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_b {
++			reg = <0x11>;
++			label = "chiron:blue:ring17";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_r {
++			reg = <0x12>;
++			label = "chiron:red:ring18";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_g {
++			reg = <0x13>;
++			label = "chiron:green:ring18";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_b {
++			reg = <0x14>;
++			label = "chiron:blue:ring18";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_r {
++			reg = <0x15>;
++			label = "chiron:red:ring19";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_g {
++			reg = <0x16>;
++			label = "chiron:green:ring19";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_b {
++			reg = <0x17>;
++			label = "chiron:blue:ring19";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_r {
++			reg = <0x18>;
++			label = "chiron:red:ring20";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_g {
++			reg = <0x19>;
++			label = "chiron:green:ring20";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_b {
++			reg = <0x1a>;
++			label = "chiron:blue:ring20";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_r {
++			reg = <0x1b>;
++			label = "chiron:red:ring21";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_g {
++			reg = <0x1c>;
++			label = "chiron:green:ring21";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_b {
++			reg = <0x1d>;
++			label = "chiron:blue:ring21";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_r {
++			reg = <0x1e>;
++			label = "chiron:red:ring22";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_g {
++			reg = <0x1f>;
++			label = "chiron:green:ring22";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_b {
++			reg = <0x20>;
++			label = "chiron:blue:ring22";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_r {
++			reg = <0x21>;
++			label = "chiron:red:ring23";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_g {
++			reg = <0x22>;
++			label = "chiron:green:ring23";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_b {
++			reg = <0x23>;
++			label = "chiron:blue:ring23";
++			linux,default-trigger = "led_ring_fb";
++		};
++	};
++
++	aw21036_2@36 {
++		compatible = "awinic,aw21036";
++		reg = <0x36>;
++		status = "okay";
++		#address-cells = <0x01>;
++		#size-cells = <0x00>;
++		gcc-default = <0xff>;
++		col-default = <0xff>;
++		wb-default = <0xff 0xff 0xff>;
++		pwm-freq-default = <0x00>;
++		pwm-phase-delay-default = <0x00>;
++		pwm-phase-invert-default = <0x00>;
++
++		led_sync {
++			led-sync;
++			label = "chiron:ring24-35:sync";
++			linux,default-trigger = "led_ring_fb-sync";
++		};
++
++		led0_r {
++			reg = <0x00>;
++			label = "chiron:red:ring24";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_g {
++			reg = <0x01>;
++			label = "chiron:green:ring24";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_b {
++			reg = <0x02>;
++			label = "chiron:blue:ring24";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_r {
++			reg = <0x03>;
++			label = "chiron:red:ring25";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_g {
++			reg = <0x04>;
++			label = "chiron:green:ring25";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_b {
++			reg = <0x05>;
++			label = "chiron:blue:ring25";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_r {
++			reg = <0x06>;
++			label = "chiron:red:ring26";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_g {
++			reg = <0x07>;
++			label = "chiron:green:ring26";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_b {
++			reg = <0x08>;
++			label = "chiron:blue:ring26";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_r {
++			reg = <0x09>;
++			label = "chiron:red:ring27";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_g {
++			reg = <0x0a>;
++			label = "chiron:green:ring27";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_b {
++			reg = <0x0b>;
++			label = "chiron:blue:ring27";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_r {
++			reg = <0x0c>;
++			label = "chiron:red:ring28";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_g {
++			reg = <0x0d>;
++			label = "chiron:green:ring28";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_b {
++			reg = <0x0e>;
++			label = "chiron:blue:ring28";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_r {
++			reg = <0x0f>;
++			label = "chiron:red:ring29";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_g {
++			reg = <0x10>;
++			label = "chiron:green:ring29";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_b {
++			reg = <0x11>;
++			label = "chiron:blue:ring29";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_r {
++			reg = <0x12>;
++			label = "chiron:red:ring30";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_g {
++			reg = <0x13>;
++			label = "chiron:green:ring30";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_b {
++			reg = <0x14>;
++			label = "chiron:blue:ring30";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_r {
++			reg = <0x15>;
++			label = "chiron:red:ring31";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_g {
++			reg = <0x16>;
++			label = "chiron:green:ring31";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_b {
++			reg = <0x17>;
++			label = "chiron:blue:ring31";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_r {
++			reg = <0x18>;
++			label = "chiron:red:ring32";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_g {
++			reg = <0x19>;
++			label = "chiron:green:ring32";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_b {
++			reg = <0x1a>;
++			label = "chiron:blue:ring32";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_r {
++			reg = <0x1b>;
++			label = "chiron:red:ring33";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_g {
++			reg = <0x1c>;
++			label = "chiron:green:ring33";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_b {
++			reg = <0x1d>;
++			label = "chiron:blue:ring33";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_r {
++			reg = <0x1e>;
++			label = "chiron:red:ring34";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_g {
++			reg = <0x1f>;
++			label = "chiron:green:ring34";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_b {
++			reg = <0x20>;
++			label = "chiron:blue:ring34";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_r {
++			reg = <0x21>;
++			label = "chiron:red:ring35";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_g {
++			reg = <0x22>;
++			label = "chiron:green:ring35";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_b {
++			reg = <0x23>;
++			label = "chiron:blue:ring35";
++			linux,default-trigger = "led_ring_fb";
++		};
++	};
++
++	aw21036_3@37 {
++		compatible = "awinic,aw21036";
++		reg = <0x37>;
++		status = "okay";
++		#address-cells = <0x01>;
++		#size-cells = <0x00>;
++		gcc-default = <0xff>;
++		col-default = <0xff>;
++		wb-default = <0xff 0xff 0xff>;
++		pwm-freq-default = <0x00>;
++		pwm-phase-delay-default = <0x00>;
++		pwm-phase-invert-default = <0x00>;
++
++		led_sync {
++			led-sync;
++			label = "chiron:ring36-47:sync";
++			linux,default-trigger = "led_ring_fb-sync";
++		};
++
++		led0_r {
++			reg = <0x00>;
++			label = "chiron:red:ring36";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_g {
++			reg = <0x01>;
++			label = "chiron:green:ring36";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led0_b {
++			reg = <0x02>;
++			label = "chiron:blue:ring36";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_r {
++			reg = <0x03>;
++			label = "chiron:red:ring37";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_g {
++			reg = <0x04>;
++			label = "chiron:green:ring37";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led1_b {
++			reg = <0x05>;
++			label = "chiron:blue:ring37";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_r {
++			reg = <0x06>;
++			label = "chiron:red:ring38";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_g {
++			reg = <0x07>;
++			label = "chiron:green:ring38";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led2_b {
++			reg = <0x08>;
++			label = "chiron:blue:ring38";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_r {
++			reg = <0x09>;
++			label = "chiron:red:ring39";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_g {
++			reg = <0x0a>;
++			label = "chiron:green:ring39";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led3_b {
++			reg = <0x0b>;
++			label = "chiron:blue:ring39";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_r {
++			reg = <0x0c>;
++			label = "chiron:red:ring40";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_g {
++			reg = <0x0d>;
++			label = "chiron:green:ring40";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led4_b {
++			reg = <0x0e>;
++			label = "chiron:blue:ring40";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_r {
++			reg = <0x0f>;
++			label = "chiron:red:ring41";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_g {
++			reg = <0x10>;
++			label = "chiron:green:ring41";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led5_b {
++			reg = <0x11>;
++			label = "chiron:blue:ring41";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_r {
++			reg = <0x12>;
++			label = "chiron:red:ring42";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_g {
++			reg = <0x13>;
++			label = "chiron:green:ring42";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led6_b {
++			reg = <0x14>;
++			label = "chiron:blue:ring42";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_r {
++			reg = <0x15>;
++			label = "chiron:red:ring43";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_g {
++			reg = <0x16>;
++			label = "chiron:green:ring43";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led7_b {
++			reg = <0x17>;
++			label = "chiron:blue:ring43";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_r {
++			reg = <0x18>;
++			label = "chiron:red:ring44";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_g {
++			reg = <0x19>;
++			label = "chiron:green:ring44";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led8_b {
++			reg = <0x1a>;
++			label = "chiron:blue:ring44";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_r {
++			reg = <0x1b>;
++			label = "chiron:red:ring45";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_g {
++			reg = <0x1c>;
++			label = "chiron:green:ring45";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led9_b {
++			reg = <0x1d>;
++			label = "chiron:blue:ring45";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_r {
++			reg = <0x1e>;
++			label = "chiron:red:ring46";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_g {
++			reg = <0x1f>;
++			label = "chiron:green:ring46";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led10_b {
++			reg = <0x20>;
++			label = "chiron:blue:ring46";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_r {
++			reg = <0x21>;
++			label = "chiron:red:ring47";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_g {
++			reg = <0x22>;
++			label = "chiron:green:ring47";
++			linux,default-trigger = "led_ring_fb";
++		};
++
++		led11_b {
++			reg = <0x23>;
++			label = "chiron:blue:ring47";
++			linux,default-trigger = "led_ring_fb";
++		};
++	};
++};
++
++&{/} {
++	auge_sound {
++		compatible = "amlogic, auge-sound-card";
++		aml-audio-card,name = "AML-AUGESOUND";
++		interrupts = <GIC_SPI 51 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "audio_exception64";
++		status = "okay";
++		spk_mute-gpios = <&gpio GPIOM_12 GPIO_ACTIVE_HIGH>;
++
++		aml-audio-card,dai-link@0 {
++			format = "dsp_b";
++			mclk-fs = <64>;
++			bitclock-master = <&tdma>;
++			frame-master = <&tdma>;
++			suffix-name = "alsaPORT-pcm";
++
++			cpu {
++				sound-dai = <&tdma>;
++				dai-tdm-slot-tx-mask = <1>;
++				dai-tdm-slot-rx-mask = <1>;
++				dai-tdm-slot-num = <2>;
++				dai-tdm-slot-width = <16>;
++				system-clock-frequency = <512000>;
++			};
++
++			codec {
++				sound-dai = <&dummy_codec>;
++			};
++		};
++
++		aml-audio-card,dai-link@1 {
++			format = "i2s";
++			mclk-fs = <256>;
++			bitclock-master = <&tdmb>;
++			frame-master = <&tdmb>;
++			suffix-name = "alsaPORT-i2s";
++
++			cpu {
++				sound-dai = <&tdmb>;
++				dai-tdm-slot-tx-mask = <1 1>;
++				dai-tdm-slot-rx-mask = <0 0>;
++				dai-tdm-slot-num = <2>;
++				dai-tdm-slot-width = <32>;
++				system-clock-frequency = <12288000>;
++			};
++
++			codec {
++				prefix-names = "woofer", "tweeters";
++				sound-dai = <&fs2105_1 &fs2105_0>;
++			};
++		};
++
++		aml-audio-card,dai-link@2 {
++			format = "i2s";
++			mclk-fs = <256>;
++			bitclock-master = <&tdmc>;
++			frame-master = <&tdmc>;
++			suffix-name = "alsaPORT-hwfeedback";
++
++			cpu {
++				sound-dai = <&tdmc>;
++				system-clock-frequency = <12288000>;
++				dai-tdm-slot-rx-mask = <1 0 1 1>;
++				dai-tdm-slot-num = <4>;
++				dai-tdm-slot-width = <16>;
++			};
++
++			codec {
++				prefix-names = "Loopback";
++				sound-dai = <&es7210>;
++			};
++		};
++
++		aml-audio-card,dai-link@3 {
++			mclk-fs = <64>;
++			suffix-name = "alsaPORT-pdm";
++
++			cpu {
++				sound-dai = <&pdm>;
++			};
++
++			codec {
++				sound-dai = <&dummy_codec>;
++			};
++		};
++
++		aml-audio-card,dai-link@4 {
++			mclk-fs = <128>;
++			continuous-clock;
++			suffix-name = "alsaPORT-spdif";
++
++			cpu {
++				sound-dai = <&spdifa>;
++				system-clock-frequency = <6144000>;
++			};
++
++			codec {
++				sound-dai = <&dummy_codec>;
++			};
++		};
++
++		aml-audio-card,dai-link@5 {
++			mclk-fs = <128>;
++			suffix-name = "alsaPORT-spdifb";
++
++			cpu {
++				sound-dai = <&spdifb>;
++				system-clock-frequency = <6144000>;
++			};
++
++			codec {
++				sound-dai = <&dummy_codec>;
++			};
++		};
++	};
++};
++/*
++ * SAR ADC: only the volume keys hang off it, on channel 2.
++ */
++&saradc {
++	status = "okay";
++};
++
++/*
++ * Volume keys. The board has exactly two physical keys and they are resistor
++ * coded on ADC channel 2: 0xc8 and 0x1e with a tolerance of 0x32 either side,
++ * reporting KEY_VOLUMEUP (0x73) and KEY_VOLUMEDOWN (0x72). Values, tolerances
++ * and order are the accepted ones for this board, unchanged --
++ * they are a property of the resistor ladder, not a preference.
++ *
++ * The node has no reg, so it lives at the root next to the other Amlogic
++ * platform devices rather than under /soc.
++ */
++&{/} {
++	adc_keypad {
++		compatible = "amlogic, adc_keypad";
++		status = "okay";
++		key_name = "vol+", "vol-";
++		key_num = <2>;
++		io-channels = <&saradc 2>;
++		io-channel-names = "key-chan-2";
++		key_chan = <2 2>;
++		key_code = <KEY_VOLUMEUP KEY_VOLUMEDOWN>;
++		key_val = <0xc8 0x1e>;
++		key_tolerance = <0x32 0x32>;
++	};
++
++	/*
++	 * The two privacy switches, reported as EV_SW so they carry state
++	 * rather than an edge: the lens cover and the microphone mute slider
++	 * are positions, and anything reading them at start-up has to see
++	 * where they are, not wait for the next flip. The camera switch is
++	 * active low, the mute switch active high, as wired.
++	 */
++	gpio-keys {
++		compatible = "gpio-keys";
++		label = "switches";
++
++		camera-switch {
++			label = "camera-switch";
++			linux,code = <SW_CAMERA_LENS_COVER>;
++			linux,input-type = <EV_SW>;
++			gpios = <&gpio GPIOT_22 GPIO_ACTIVE_LOW>;
++		};
++
++		mute-switch {
++			label = "mute-switch";
++			linux,code = <SW_MUTE_DEVICE>;
++			linux,input-type = <EV_SW>;
++			gpios = <&gpio GPIOH_0 GPIO_ACTIVE_HIGH>;
++		};
++	};
++};
++/*
++ * Touchscreen: Himax HX83102 in-cell controller on SPICC2, as accepted on
++ * this board. The label is the trap here -- the panel and the
++ * digitiser are the same glass, but the controller is spi@54000, which
++ * mesont7.dtsi labels spicc2, not spicc3; a decompiled DTB names its pin
++ * group spicc3_pins only because of its own node ordering.
++ * Interrupt 167 and the spi2_* pin function both confirm the controller.
++ *
++ * spi-cpol and spi-cpha are kept exactly as the decompiled DTB holds them:
++ * four bytes of zero rather than empty properties. of_spi_parse_dt() tests them
++ * with of_property_read_bool(), which is true for a property that exists at
++ * all, so this is mode 3 and not mode 0. It is what the accepted board runs.
++ *
++ * The driver itself is an external module built from the pinned Google source
++ * (see patches/himax and scripts/builder/build-himax.sh); the axis orientation
++ * is a module parameter, not a device tree property, because the digitiser's
++ * origin is fixed relative to the glass and must not follow display rotation.
++ */
++&spicc2 {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&spicc2_pins>;
++	cs-gpios = <&gpio GPIOY_3 GPIO_ACTIVE_HIGH>;
++
++	himax_tp@0 {
++		compatible = "himax,hxcommon";
++		device_name = "himax_tp";
++		status = "okay";
++		reg = <0>;
++		spi-cpol = <0>;
++		spi-cpha = <0>;
++		spi-max-frequency = <10000000>;
++		himax,panel-coords = <0 1200 0 1920>;
++		himax,display-coords = <0 1200 0 1920>;
++		himax,irq-gpio = <&gpio GPIOY_10 GPIO_ACTIVE_HIGH>;
++		himax,rst-gpio = <&gpio GPIOY_7 GPIO_ACTIVE_HIGH>;
++	};
++};
++/*
++ * OP-TEE shared memory. Without this the driver allocates its shared memory
++ * from the general pool instead of the reserved one this board sets aside --
++ * the pool the video firmware TA is reached through. The kernel side of this
++ * is already in the queue; this is the board half of the same change. The
++ * node has no label in the SoC dtsi, so it is extended by path.
++ */
++&{/optee} {
++	amlogic,prefer-reserved-shm;
++};
++
++/*
++ * Deinterlacer. This board has one progressive MIPI panel and no interlaced
++ * or 4K source, so the scatter allocator and the 4K path stay off exactly as
++ * they are accepted on this board: both reserve memory the display path
++ * needs and neither has anything to deinterlace.
++ */
++&{/multi-di} {
++	alloc_sct = <0>;
++	en_4k = <0>;
++};
++
++/*
++ * PWM channels. The SoC dtsi ships every controller except PWM_A and
++ * PWM_AO_EF disabled, so a board tree has to say which ones it wires up.
++ * This board drives the panel backlight from PWM_EF and PWM_AO_CD -- the two
++ * channels bl_pwm_conf names as pwm_ef and pwmao_cd -- and enables PWM_AO_AB
++ * beside them, as this board requires. Leaving PWM_AO_CD
++ * disabled does not cost one feature quietly: the chip never registers, the
++ * backlight request comes back -EPROBE_DEFER as
++ * "bl error: unable to request PWM_AO_C", and every level change afterwards
++ * logs "bl_set_pwm_normal: invalid bl_pwm_ch". PWM_AO_EF is enabled by the
++ * SoC dtsi and nothing on this board drives it, so it is turned off here the
++ * way this board turns it off.
++ */
++&pwm_ef {
++	status = "okay";
++};
++
++&pwmao_ab {
++	status = "okay";
++};
++
++&pwmao_cd {
++	status = "okay";
++};
++
++&pwmao_ef {
++	status = "disabled";
++};
++
++/*
++ * The PWM consumers that go with the controllers above. Enabling a controller
++ * without its consumer, or the other way round, is what a half-transferred
++ * power tree looks like: vddcpua and vddcpub stay off and cpufreq reports
++ * "freq paramter setting error", while vddnpu keeps asking a disabled
++ * controller for a duty cycle and the NPU probe fails with "voltage init
++ * fail". This board drives both CPU rails from PWM and makes the
++ * NPU rail a fixed 890 mV supply, since PWM_AO_EF is not wired on this board.
++ */
++&vddcpua {
++	status = "okay";
++};
++
++&vddcpub {
++	status = "okay";
++};
++
++&vddnpu {
++	compatible = "regulator-fixed";
++	regulator-min-microvolt = <890000>;
++	regulator-max-microvolt = <890000>;
++	regulator-always-on;
++	/delete-property/ pwms;
++	/delete-property/ max-duty-cycle;
++	/delete-property/ voltage-table;
++	status = "okay";
++};
++
++/*
++ * The CMA shrinker hands reserved CMA back under memory pressure. This
++ * board keeps it off: the display and codec pools here are sized for the
++ * worst case and must stay contiguous, and reclaiming from them is what the
++ * pool exists to prevent.
++ */
++&cma_shrinker {
++	status = "disabled";
++};
++
++/*
++ * PWM_A carries the W2 32.768 kHz sleep clock; wifi_dt.c programs the
++ * double-channel configuration from the SoC dtsi, whose values are the
++ * accepted ones for this board.
++ */
++&pwm_ab {
++	pinctrl-0 = <&pwm_a_pins>;
++	pinctrl-names = "default";
++};
++
++/*
++ * W2 Wi-Fi: host wake on GPIOC_3 (level low, from the SoC dtsi) and the
++ * module power enable on GPIOC_4, as accepted on this board.
++ */
++&aml_wifi {
++	status = "okay";
++	dhd_static_buf;
++	interrupt-gpios = <&gpio GPIOC_3 GPIO_ACTIVE_HIGH>;
++	power_on-gpios = <&gpio GPIOC_4 GPIO_ACTIVE_HIGH>;
++};
++
++/* W2 Bluetooth side of the same module. */
++&aml_bt {
++	status = "okay";
++	reset-gpios = <&gpio GPIOC_2 GPIO_ACTIVE_HIGH>;
++	hostwake-gpios = <&gpio GPIOC_5 GPIO_ACTIVE_HIGH>;
++};
++
++/* Panfrost needs the standard binding for the T7C ACE-Lite path. */
++/*
++ * USB. The SoC dtsi carries every node of this block with status "disable"
++ * and, on the two DRD controllers, no compatible at all -- so nothing binds
++ * and the board has no USB whatever. The statuses and the three missing
++ * properties below are the board's own:
++ *
++ *   crg2drd  gets "amlogic, crg-drd"       -- the dual-role port
++ *   crg3drd  gets "amlogic, crg-host-drd"  -- host only
++ *   crg21otg gets controller-type 1, crg20otg 3
++ *
++ * Which of the pair is enabled is fixed by the board: the OTG block and the
++ * gadget controller on fe03a000/fde00000 stay off, their counterparts on
++ * fe03a020/fdd00000 come up. portnum is a board property and is not in the
++ * dtsi at all.
++ */
++&crg_phy_20 {
++	status = "okay";
++	portnum = <1>;
++};
++
++&crg_phy_21 {
++	status = "okay";
++	portnum = <1>;
++};
++
++&crg3_phy_20 {
++	status = "okay";
++	portnum = <1>;
++};
++
++&crg3_phy_21 {
++	status = "okay";
++	portnum = <0>;
++};
++
++&crg20_otg {
++	status = "disabled";
++	controller-type = <3>;
++};
++
++&crg21_otg {
++	status = "okay";
++	controller-type = <1>;
++};
++
++&crg2_drd {
++	compatible = "amlogic, crg-drd";
++	status = "okay";
++};
++
++&crg3_drd {
++	compatible = "amlogic, crg-host-drd";
++	status = "okay";
++};
++
++&crg_udc_3 {
++	status = "disabled";
++};
++
++&crg_udc_2 {
++	status = "okay";
++};
++
++/*
++ * The NPU rail. The SoC dtsi already describes the ADLA itself completely --
++ * registers, SRAM, interrupt, the whole ANAKIN clock chain, r2p0 and smmu --
++ * and reserved-memory above already carries its 384 MiB pool, so the board's
++ * only remaining job is the supply. On this design it is a fixed 0.89 V rail;
++ * the T7 reference drives the same rail from PWM_AO_F, which is where the
++ * node name comes from; it is described here as a
++ * fixed regulator rather than bringing up the PWM one.
++ */
++&{/} {
++	vddnpu: pwmao_f-regulator {
++		compatible = "regulator-fixed";
++		regulator-name = "vddnpu";
++		regulator-min-microvolt = <890000>;
++		regulator-max-microvolt = <890000>;
++		regulator-always-on;
++		status = "okay";
++	};
++};
++
++&adla {
++	vddnpu-supply = <&vddnpu>;
++};
++
++/*
++ * The camera: one OV13B10 on i2c4, four MIPI lanes into csiphy0, through the
++ * adapter and the ISP.
++ *
++ * The SoC dtsi brings up camera0, camera2 and the CSI/adapter/ISP blocks with
++ * no board wiring, and amlcam then probes a pipeline that has no sensor at the
++ * end of it: its first register access is refused by the firmware and the
++ * kernel takes an asynchronous SError at about 6.7 s. What stops that is not
++ * the status flags but the endpoint link below -- the sensor node and the
++ * csiphy0 port that name each other are what make this a described pipeline
++ * rather than a dangling one. camera2 and csiphy2 stay off because there is no
++ * second camera on this board.
++ *
++ * The mclk chain is the vendor's: MCLK_0 off its own PLL, with the selector
++ * and predivider named so the sensor driver can rate-set the whole chain, and
++ * the crystal as the last parent. Those four indices were read back from the
++ * decompiled DTB and match the symbols here exactly (375, 372, 374, 31).
++ */
++&i2c4 {
++	ov13b10: sensor0@36 {
++		compatible = "amlogic, sensor";
++		status = "okay";
++		index = <0>;
++		reg = <0x36>;
++		clocks = <&clkc CLKID_MCLK_0>,
++			 <&clkc CLKID_MCLK_0_SEL>,
++			 <&clkc CLKID_MCLK_0_PRE>,
++			 <&clkc CLKID_MCLK_PLL>,
++			 <&xtal>;
++		clock-names = "mclk", "mclk_sel", "mclk_pre", "mclk_p", "mclk_x";
++		pwdn-gpios = <&gpio GPIOY_14 GPIO_ACTIVE_HIGH>;
++		reset-gpios = <&gpio GPIOY_18 GPIO_ACTIVE_HIGH>;
++
++		port {
++			ov13b10_ep: ov13b10 {
++				data-lanes = <0 1 2 3>;
++				link-frequencies = /bits/ 64 <1080000000>;
++				remote-endpoint = <&csiphy0_ep>;
++			};
++		};
++	};
++};
++
++&camera0 {
++	status = "okay";
++};
++
++&camera2 {
++	status = "disabled";
++};
++
++&csiphy0 {
++	status = "okay";
++
++	port {
++		csiphy0_ep: endpoint {
++			status = "okay";
++			clock-lanes = <4>;
++			data-lanes = <0 1 2 3>;
++			remote-endpoint = <&ov13b10_ep>;
++		};
++	};
++};
++
++&csiphy2 {
++	status = "disabled";
++};
++
++&adapter0 {
++	status = "okay";
++};
++
++&isp0 {
++	status = "okay";
++};

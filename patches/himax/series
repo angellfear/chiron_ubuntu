@@ -1,0 +1,4 @@
+# One relative patch path per line after hardware acceptance.
+# A single working-tree delta over the pinned Google checkout, kept whole
+# because that is how it is applied.
+0001-himax-run-the-bluejay-touch-module-on-the-Chiron-pane.patch

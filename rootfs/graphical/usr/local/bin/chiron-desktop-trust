@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Mark the desktop's own launchers as trusted, before the desktop draws them.
+#
+# libfm-qt will not run a desktop entry that it does not trust. Tapping one
+# opens an "Execute file" dialog offering Open, Execute and Cancel instead --
+# in English, over a Russian desktop, on a board whose only pointing device is
+# a finger. Trust is per file and per account, and the flag it reads is GIO's
+# metadata::trusted, which lives in the account's own GVfs metadata store, not
+# in the file: it cannot be shipped in the image and cannot be set by
+# chiron-firstboot either, because at that point in the boot the account has no
+# session bus for gvfsd-metadata to answer on. Here it does.
+#
+# Only the launchers the image put there are trusted -- ones the person added
+# themselves are left to the dialog, which is what it is for. Executable, too:
+# libfm-qt wants both before it will treat an entry as an application.
+set -eu
+
+skel=/etc/skel/Desktop
+desktop=${XDG_DESKTOP_DIR:-$HOME/Desktop}
+
+[ -d "$skel" ] || exit 0
+[ -d "$desktop" ] || exit 0
+
+for shipped in "$skel"/*.desktop; do
+    [ -f "$shipped" ] || continue
+    mine="$desktop/$(basename "$shipped")"
+    [ -f "$mine" ] || continue
+    [ -x "$mine" ] || chmod u+x "$mine" || true
+    gio set -t string "$mine" metadata::trusted true 2>/dev/null || true
+done

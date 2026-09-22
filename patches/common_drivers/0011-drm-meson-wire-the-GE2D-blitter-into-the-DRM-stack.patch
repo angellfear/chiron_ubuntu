@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 11/44] drm/meson: wire the GE2D blitter into the DRM stack
+
+Validated on this board.
+---
+ drivers/media/media_main.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/media/media_main.c b/drivers/media/media_main.c
+index 80e8c505a..b561a9839 100644
+--- a/drivers/media/media_main.c
++++ b/drivers/media/media_main.c
+@@ -110,6 +110,8 @@ static int __init media_main_init(void)
+ 		call_sub_init(amlogic_codec_mm_dma_buf_init);
+ 		call_sub_init(amlogic_heap_secure_dma_buf_init);
+ 		call_sub_init(mua_init);
++		/* Encoder userspace requires the GE2D character device. */
++		call_sub_init(ge2d_init_module);
+ 		pr_debug("### %s() drm-stack end\n", __func__);
+ 		return 0;
+ 	}

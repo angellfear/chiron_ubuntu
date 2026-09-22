@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 17/44] drm/meson: skip the vblank wait in the shutdown path
+
+Validated on this board.
+---
+ drivers/drm/meson_drv.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/drm/meson_drv.c b/drivers/drm/meson_drv.c
+index 61d4265fd..4713bb632 100644
+--- a/drivers/drm/meson_drv.c
++++ b/drivers/drm/meson_drv.c
+@@ -747,6 +747,19 @@ static void am_meson_drv_shutdown(struct platform_device *pdev)
+ 
+ 	dev = priv->drm;
+ 
++	/*
++	 * The vendor atomic teardown waits for a vblank/commit worker after the
++	 * LCD and VRR shutdown callbacks have already disabled that path.  A
++	 * reboot does not need a clean modeset; leaving this wait active wedges
++	 * kernel_restart() indefinitely.
++	 */
++	DRM_ERROR("%s: bypassing atomic display teardown on reboot\n", __func__);
++	drm_for_each_crtc(crtc, dev)
++		disable_irq(to_am_meson_crtc(crtc)->irq);
++	priv->shutdown_on = true;
++	dev->num_crtcs = 0;
++	return;
++
+ 	DRM_INFO("%s: atomic shutdown begin\n", __func__);
+ 	/* prevent drm_wait_vblank_ioctl on waiting event*/
+ 	drm_atomic_helper_shutdown(dev);

@@ -1,0 +1,136 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Session wrapper started by greetd. Everything it sets is a property of this
+# board, not of whoever is logged in, which is why the session is launched
+# through a script in /usr/local/bin rather than from a user's profile.
+set -eu
+
+# No WAYFIRE_CONFIG_FILE, and this is deliberate.
+#
+# It used to be set to /etc/wayfire/wayfire.ini, which made the configuration a
+# property of the board rather than of an account -- the right instinct, and it
+# had one consequence nobody had checked: wcm, the Wayfire Config Manager in
+# the application menu, writes back to whatever that variable names. The file
+# is root:root 0664 and the session user is in no group that owns it, so wcm
+# opened it read-only, displayed the settings correctly, and dropped every save
+# on the floor. No error dialog, no log line: the settings simply did not
+# apply, and enabling a plugin from the menu did nothing at all.
+#
+# There is no third option. wcm writes exactly where it reads, so a
+# configuration the session user cannot write is a configuration wcm cannot
+# edit. With the variable unset, wayfire falls back to ~/.config/wayfire.ini --
+# which chiron-firstboot seeds from the system file -- and wcm can write it.
+#
+# WF_SHELL_CONFIG_FILE is gone for a different reason: this wf-shell does not
+# carry the string at all, so it never did anything. wf-panel reads
+# $XDG_CONFIG_HOME/wf-shell.ini, and firstboot seeds that too.
+#
+# The cost, stated plainly: the board's session settings now live in the
+# account's dotfiles. An image that changes wayfire.ini no longer reaches a
+# board whose account already exists -- firstboot seeds these files once and
+# then leaves them alone, because overwriting them would throw away exactly the
+# edits this change exists to permit. Wiping the overlay resets the account and
+# reseeds them, which is the supported way to reset a board anyway.
+
+# No WAYFIRE_PLUGIN_PATH: every plugin this session loads is a packaged one.
+# It would only be needed for self-compiled plugins or a rebuilt
+# move/decoration; this image is built from archive packages only, and naming
+# a directory that does not exist gains nothing.
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=wayfire
+
+# DRM card numbers depend on probe order: either Panfrost or the Meson display
+# controller can become card0. The udev by-path link names the KMS device by its
+# platform node and remains stable across kernel/module rebuilds.
+kms_device=/dev/dri/by-path/platform-drm-subsystem-card
+if [ ! -e "$kms_device" ]; then
+    echo "Meson KMS device is missing: $kms_device" >&2
+    exit 1
+fi
+export WLR_DRM_DEVICES=$kms_device
+
+# Scan out uncompressed. Left to itself, wlroots allocates the primary
+# framebuffer through GBM with whatever modifier the plane and Panfrost agree
+# on, and on this pair that is AFBC -- the fb dumped from
+# /sys/kernel/debug/dri/0/framebuffer carried modifier 0x800000000000062, i.e.
+# ARM AFBC with 32x8 blocks, SPLIT and SPARSE. The Amlogic display controller
+# accepts it and then fails to decode it: the kernel logs
+#
+#   [drm:arm_fbc_check_error [aml_drm]] *ERROR* afbc error happened, 6-1
+#
+# in bursts whenever the screen is redrawing hard, and the picture tears apart
+# partway down the panel -- which is what video playback looked like. The plane
+# advertising a superblock layout its decoder cannot handle is a driver bug in
+# a vendor module this image does not build, so the fix is on this side: no
+# modifiers means a linear framebuffer, which the controller reads correctly.
+# The GPU still renders with AFBC internally; only the buffer the display reads
+# is plain.
+#
+# It, and every other display knob, now lives in /etc/default/chiron-session:
+# bisecting this vendor DRM stack one variable at a time should cost a reboot,
+# not a 500 MB image rebuild. The defaults below are the fallback for a board
+# whose overlay predates that file.
+export WLR_DRM_NO_MODIFIERS=1
+
+if [ -r /etc/default/chiron-session ]; then
+    # Read as shell, then exported by name: the file is a list of NAME=value
+    # lines with comments, and sourcing it would otherwise set them without
+    # putting them in the environment wayfire actually inherits.
+    set -a
+    . /etc/default/chiron-session
+    set +a
+fi
+
+# Per-user keyboard pages. This deliberately comes after the board defaults so
+# another language can be enabled without writing to /etc (which lives in the
+# squashfs/overlay). The file uses the same two NAME=value lines documented in
+# /etc/default/chiron-session. It is sourced as the logged-in user and may only
+# change that user's session environment.
+keyboard_config=${XDG_CONFIG_HOME:-${HOME}/.config}/chiron/keyboard.conf
+if [ -r "$keyboard_config" ]; then
+    set -a
+    . "$keyboard_config"
+    set +a
+fi
+
+# Native Wayland backends where they exist; without these, GTK and Qt apps fall
+# back to Xwayland and lose touch scrolling and HiDPI handling.
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM=wayland
+export GDK_BACKEND=wayland,x11
+export SDL_VIDEODRIVER=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# Run on the user bus that systemd already provides, not on a private one.
+#
+# This used to be `dbus-run-session -- wayfire`, which starts a second bus. The
+# session then had two: everything launched from here spoke to the private one,
+# while `systemd --user` -- and therefore every service whose D-Bus service file
+# says SystemdService=, which is most of them -- stayed on /run/user/1000/bus.
+# Activation crossed the gap and failed: dbus-daemon asked systemd to start
+# xdg-desktop-portal-gtk, systemd started it against the other bus, the name
+# never appeared on the private one, and the frontend gave up with `Failed to
+# create file chooser proxy: Timeout was reached`. `dbus-update-activation-
+# environment --systemd` failed there too, because org.freedesktop.systemd1 is
+# not reachable on a private bus.
+#
+# systemd's dbus.socket creates the socket when the user manager starts, which
+# greetd's PAM stack does before this script runs -- but not necessarily before
+# it gets here, so wait briefly rather than racing. If it never appears (no
+# logind session, recovery), fall back to the private bus: a session on one bus
+# beats no session at all.
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    i=0
+    while [ ! -S "$XDG_RUNTIME_DIR/bus" ] && [ "$i" -lt 50 ]; do
+        i=$((i + 1))
+        sleep 0.1
+    done
+fi
+if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    exec systemd-cat -t wayfire wayfire
+fi
+echo "no user bus at $XDG_RUNTIME_DIR/bus; falling back to a private session bus" >&2
+exec systemd-cat -t wayfire dbus-run-session -- wayfire

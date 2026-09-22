@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Archive kernel-crash evidence from ramoops onto the desktop
+Documentation=file:/usr/local/sbin/chiron-evidence
+# Packs the pstore records a kernel panic left behind, once, onto the desktop
+# account's Desktop; where that account does not exist yet, the archive lands
+# on /root/Desktop instead.
+# Ordered after chiron-firstboot, which owns that account, and after
+# systemd-pstore, which moves the records into /var/lib/systemd/pstore.
+#
+# Deliberately NOT after time-set.target: this board has no RTC, and on a
+# fresh overlay -- every deploy -- there is no saved clock either, so
+# time-set waited for NTP and held this unit back for minutes. Evidence
+# collection must not depend on the network; the name of the archive may then
+# carry an unsynchronised timestamp, which metadata.txt corrects.
+After=systemd-pstore.service chiron-firstboot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-evidence --boot
+
+[Install]
+WantedBy=multi-user.target

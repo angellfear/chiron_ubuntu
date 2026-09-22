@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Reconnect wlan0 after NetworkManager gives up on it
+Documentation=file:/usr/local/sbin/chiron-wifi-watchdog
+# It talks to NetworkManager over D-Bus and does nothing useful without it.
+# Wants= rather than Requires= so a NetworkManager restart does not take the
+# watchdog down with it -- Restart=always would bring it back, but there is no
+# reason to make the gap.
+Wants=NetworkManager.service
+After=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/chiron-wifi-watchdog
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

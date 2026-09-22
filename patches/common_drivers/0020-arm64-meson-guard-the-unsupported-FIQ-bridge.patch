@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 20/44] arm64: meson: guard the unsupported FIQ bridge
+
+Validated on this board.
+---
+ drivers/debug/lockup.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/debug/lockup.c b/drivers/debug/lockup.c
+index 36076262c..ac9ae0fe9 100644
+--- a/drivers/debug/lockup.c
++++ b/drivers/debug/lockup.c
+@@ -968,8 +968,17 @@ static void fiq_debug_addr_init(void)
+ 	fiq_buf_size = res.result.buf_size;
+ 	fiq_percpu_size = res.result.percpu_size;
+ 
+-	/* Current ATF version does not support FIQ DEBUG */
+-	if (fiq_phy_addr == 0 || fiq_phy_addr == -1) {
++	/* Current ATF version does not support FIQ DEBUG.
++	 *
++	 * The ATF on this board answers the unsupported case with a 32-bit
++	 * -1, which widens to 0x00000000ffffffff in a 64-bit phys_addr_t and
++	 * so slips past a test for -1. The driver then ioremap()s that
++	 * address and leaves the FIQ armed on a buffer that is not there;
++	 * timer interrupts stop being delivered soon after, and the machine
++	 * dies in rcu_preempt stalls with "timer wakeup didn't happen".
++	 */
++	if (fiq_phy_addr == 0 || fiq_phy_addr == (phys_addr_t)-1 ||
++	    fiq_phy_addr == (phys_addr_t)(u32)-1) {
+ 		WARN(1, "invalid fiq_phy_addr\n");
+ 		return;
+ 	}

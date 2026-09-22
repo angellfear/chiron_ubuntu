@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Development scratch layer -- NOT a profile and NOT a separate image.
+#
+# This list is an extra apt cache layer stacked on top of the profile layer,
+# enabled with CHIRON_DEV_LAYER=1 when calling build-profile.sh. It exists for
+# one reason: iterating on a package set in a temporary workspace used to cost
+# a full apt run per attempt, because editing profiles/graphical/packages.list
+# changes that layer's key and misses its cache -- twenty attempts, twenty
+# multi-hour runs under qemu-user.
+#
+# With this layer, the profile layer underneath is untouched and keeps hitting
+# its cache, so only what changes here is reinstalled.
+#
+#   # fast iteration in a throwaway workspace
+#   CHIRON_DEV_LAYER=1 ./scripts/builder/build-profile.sh <workspace> graphical
+#
+#   # clean production build: leave the variable unset
+#   ./scripts/builder/build-profile.sh <workspace> graphical
+#
+# The image is still <profile>.sqfs either way; this layer never renames it and
+# never creates a profile of its own. Because the profile layer is saved
+# separately and unmodified, the clean build restores the very tarball the dev
+# builds were stacking on instead of starting cold.
+#
+# When something here proves itself, move it into the profile list it belongs
+# to and empty it out again. Anything left here does NOT ship in a production
+# image -- that is the point of the split, and also the trap: a package that is
+# only ever tested from this layer has never been in an image the board runs.
+#
+# One package per line, comments with #. An empty list is valid and installs
+# nothing.

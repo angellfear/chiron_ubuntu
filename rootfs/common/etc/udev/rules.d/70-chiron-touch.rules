@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Chiron touchscreen: system-wide libinput setup.
+#
+# Deliberately no LIBINPUT_CALIBRATION_MATRIX here. The axis correction this
+# panel needs is already applied by the driver -- /etc/modprobe.d/chiron-touch.conf
+# loads himax_mmi with swap_xy=0 invert_x=1 invert_y=1 -- and the display itself
+# is scanned out untransformed. A calibration matrix on top of that only mirrors
+# the digitiser away from the image.
+
+# The himax driver exposes a second node that replays touches as relative mouse
+# motion. With a real multitouch node present it only produces a phantom cursor
+# and duplicate clicks, so hide it from libinput entirely.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="himax-touchscreen-pointer", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1"

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 24/44] media: vdec: report NV21M so the FFmpeg V4L2 mapping
+ matches
+
+Validated on this board.
+---
+ drivers/media_modules/amvdec_ports/aml_vcodec_dec.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index 9215f82b9..4b16010b3 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -3423,7 +3423,11 @@ static int vidioc_vdec_s_fmt(struct file *file, void *priv,
+ 	if (!V4L2_TYPE_IS_OUTPUT(f->type) && !support_format_I420) {
+ 		if (V4L2_TYPE_IS_MULTIPLANAR(f->type)) {
+ 			if (pix_mp->pixelformat == V4L2_PIX_FMT_YUV420)
+-				pix_mp->pixelformat = V4L2_PIX_FMT_NV21;
++				/*
++				 * FFmpeg V4L2 mapping supports native NV21 only as
++				 * the two-plane NM21/NV21M format.
++				 */
++				pix_mp->pixelformat = V4L2_PIX_FMT_NV21M;
+ 			else if (pix_mp->pixelformat == V4L2_PIX_FMT_YUV420M)
+ 				pix_mp->pixelformat = V4L2_PIX_FMT_NV21M;
+ 		} else if (pix->pixelformat == V4L2_PIX_FMT_YUV420) {

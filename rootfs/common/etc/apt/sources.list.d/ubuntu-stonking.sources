@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+#
+# The next Ubuntu release, for Mesa and libdrm only -- see
+# /etc/apt/preferences.d/mesa-stonking, which keeps every other package on
+# this release. The proposed pocket is listed because a new Mesa point release
+# lands there first and sits in it for days before migrating.
+Types: deb
+URIs: http://ports.ubuntu.com/ubuntu-ports
+Suites: stonking stonking-proposed
+Components: main
+Architectures: arm64
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

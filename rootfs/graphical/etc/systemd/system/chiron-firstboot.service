@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Create the desktop account and SSH host keys on first boot
+Documentation=file:/usr/local/sbin/chiron-firstboot
+# greetd autologins the account this creates, and edits greetd's own config to
+# match, so it has to finish first. Before= alone would let greetd start if
+# this unit failed; the ordering plus greetd's Requires on nothing means a
+# failure here shows up as a text console rather than a boot loop, which is the
+# right failure for a board with no keyboard.
+Before=greetd.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

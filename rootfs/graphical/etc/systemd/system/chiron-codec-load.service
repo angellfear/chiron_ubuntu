@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load the Chiron hardware video decoders and encoders
+Documentation=file:/usr/local/bin/load-codecs.sh
+# Not modules-load.d: these must come up after the secure firmware has been
+# handed to the TEE, and systemd-modules-load runs long before that.
+Requires=chiron-video-firmware.service
+After=local-fs.target chiron-video-firmware.service
+Before=greetd.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+ExecStart=/usr/local/bin/load-codecs.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

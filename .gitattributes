@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+* text=auto eol=lf
+*.sh text eol=lf
+*.conf text eol=lf
+*.list text eol=lf
+# Patch files carry upstream context verbatim: their whitespace is not ours
+# to fix, and the policy check must not trip over it.
+*.patch text eol=lf -whitespace
+# The same holds for everything carried across verbatim: vendor firmware
+# payloads, the out-of-tree driver sources and their build glue, and the
+# userspace carried unchanged. Their whitespace is not ours to fix,
+# byte-identity is what these files are checked against, and "fixing" it
+# would silently break that.
+drivers/** -whitespace
+src/** -whitespace
+rootfs/*/usr/lib/firmware/** -whitespace
+rootfs/*/usr/local/** -whitespace
+
+*.ps1 text eol=crlf

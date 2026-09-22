@@ -1,0 +1,66 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Raise or hide the on-screen keyboard.
+#
+# Nothing on this board asks for a keyboard on its own. The Wayland way for
+# that is an input-method client speaking zwp_input_method_v2, which would
+# have to be compiled separately and this image deliberately does not carry --
+# so a text field getting focus raises nothing, and the keyboard is something a
+# person asks for. This is the thing behind that request: the panel launcher
+# runs it, and so can anything else.
+#
+# wvkbd is started hidden with the session and toggled with SIGRTMIN, rather
+# than started and killed. Starting it costs a layout parse and a surface
+# every time, and killing it loses the layer the person had switched to; the
+# signal is what wvkbd itself documents for this.
+set -eu
+
+# Latin, Cyrillic, symbols, emoji and the arrow/navigation block, in that order
+# on the layer key. Both alphabets are here because the session's physical
+# keyboard carries both (us,ru in wayfire.ini) and an on-screen keyboard that
+# could only type one of them would be the odd one out.
+#
+# The landscape list is separate because wvkbd switches lists with the screen:
+# `landscape` and `landscapespecial` are the wide forms of `full` and
+# `special`, and cyrillic, emoji and nav have no wide variant to swap in.
+LAYERS=${LAYERS:-full,cyrillic,special,emoji,nav}
+LANDSCAPE_LAYERS=${LANDSCAPE_LAYERS:-landscape,cyrillic,landscapespecial,emoji,nav}
+
+# The panel is 1200x1920 at one detent and 1920x1200 at the other, so the
+# keyboard gets its own height for each: a third of the screen in portrait, and
+# a little under half of the much shorter landscape screen.
+HEIGHT=${HEIGHT:-620}
+LANDSCAPE_HEIGHT=${LANDSCAPE_HEIGHT:-460}
+FONT=${FONT:-DejaVu Sans 22}
+
+if [ -r /etc/default/chiron-keyboard ]; then
+    # shellcheck source=/dev/null
+    . /etc/default/chiron-keyboard
+fi
+
+case "${1:-toggle}" in
+start)
+    # Started by the session, hidden. Idempotent: a second session start must
+    # not leave two keyboards fighting over the same surface.
+    pgrep -x wvkbd-mobintl >/dev/null && exit 0
+    exec wvkbd-mobintl --hidden \
+        -l "$LAYERS" --landscape-layers "$LANDSCAPE_LAYERS" \
+        -H "$HEIGHT" -L "$LANDSCAPE_HEIGHT" --fn "$FONT"
+    ;;
+toggle)
+    pid=$(pgrep -x wvkbd-mobintl || true)
+    if [ -n "$pid" ]; then
+        kill -s RTMIN "$pid"
+        exit 0
+    fi
+    # Nothing running: start it and show it, so the button works even in a
+    # session where the autostart did not.
+    wvkbd-mobintl -l "$LAYERS" --landscape-layers "$LANDSCAPE_LAYERS" \
+        -H "$HEIGHT" -L "$LANDSCAPE_HEIGHT" --fn "$FONT" &
+    ;;
+*)
+    echo "usage: $0 [start|toggle]" >&2
+    exit 2
+    ;;
+esac

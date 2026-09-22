@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Wait for the Chiron OV13B10 media graph and load v4l2loopback
+After=chiron-codec-load.service
+Wants=chiron-codec-load.service
+Before=chiron-camera.service chiron-camera-bridge.service chiron-camera-privacy.service
+ConditionPathExists=/usr/lib/chiron-camera/ispService
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/load-chiron-camera.sh
+TimeoutStartSec=30
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

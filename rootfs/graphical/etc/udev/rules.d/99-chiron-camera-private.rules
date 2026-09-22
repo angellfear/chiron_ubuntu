@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# logind's generic 73-seat-late rule queues its uaccess ACL before local rules
+# finish. Run the final chmod after that queued helper so only ChironCamera is
+# visible to desktop camera clients; all direct ISP nodes stay private.
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-ddr-input|isp-param|isp-stats|isp-output[0-3]|isp-raw", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess", RUN+="/bin/chmod 0600 /dev/%k"

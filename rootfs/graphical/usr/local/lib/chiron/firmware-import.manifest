@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Vendor firmware this image does not carry, and the board supplies.
+#
+# One line per file:
+#   <known-good sha256 or ->  <expected size>  <destination>  [optional]
+#
+# Neither column is a gate. The vendor reissues these files: a rebuild with a
+# minor change is a different checksum and a slightly different size while
+# being the same firmware, and refusing to import it would strand a board that
+# is perfectly capable of running. So:
+#
+#   sha256  a file known to be right. If a candidate matches it, it is taken
+#           at once and nothing else is considered. "-" means none is known.
+#   size    what the file is expected to weigh, used only to tell same-named
+#           files apart. A candidate is accepted when it lands between half
+#           and double this, and the closest one wins.
+#
+# The size bound is not pedantry. /lib/firmware/video/video_ucode.bin on the
+# device is a symlink to the 389,696-byte T7 codec firmware, which the VideoFW
+# TA rejects at its RSA check (0xffff3072); the file that belongs here is
+# Android's signed 1,951,232-byte package. Two different files, one name --
+# matching on the name alone would import the one that cannot work.
+#
+# "optional" marks a file that not every firmware revision carries and that
+# nothing in this image depends on. It is imported when the board has it; when
+# it does not, that is not a failure and does not keep the import running on
+# every boot. 9a04f079-....ta is one: no Chiron component opens that TA, and
+# the Android 11 build of October 2023 has six TAs in vendor/lib/teetz, not
+# seven -- checked on a board.
+#
+# No path inside the Android tree is named. chiron-firmware-import searches the
+# read-only Android volumes by name; the vendor's own layout is not ours to
+# depend on.
+#
+# These files are all third-party: Himax (touch controller firmware), Amlogic
+# (signed trusted applications, the video microcode and the Bluetooth
+# firmware) and the appliance vendor's amplifier tuning for the two FS2105
+# parts, written with FourSemi's tool. This project has no redistribution
+# grant for any of them and ships none of them. What it ships is this list; the bytes come off the
+# board's own storage. See THIRD_PARTY.md.
+#
+# The Zigbee coordinator's own firmware is deliberately NOT here: it lives on
+# the Telink coordinator chip, the host only talks to it over /dev/ttyS3, and
+# nothing in this image loads or reflashes it.
+8e4e26bbf400cea040eaadbe28f3a008f662c545b3a1e099745a4b027fee199d  131072  /usr/lib/firmware/Himax_firmware.bin
+2bf4cb6a5970aa6c75531c0569a243b5ee2aede3314cac89ce6aebaef6bb905c  131072  /usr/lib/firmware/Himax_mpfw.bin
+c7acf512276f30e21a027b4a6d2401806423927d79e4caf388011b339d8db438  655368  /usr/lib/firmware/amlbt/w2_bt_fw_uart.bin
+70157ef89716fd155676ce88809c08ea9c59f8d91771d01a87ba3fa1768e1ad7  1951232  /usr/lib/firmware/video/video_ucode.bin
+12b5df945663c9d49a927dc1a7b1fba0f3cb030e479818fa99d66e4f68b6b447  76288  /usr/lib/firmware/video/h264_enc.bin
+e3855c540f8982ff1d5704563c872cfd57f2121f6b69339e68b045362becc4eb  114496  /usr/lib/optee_armtz/2c1a33c0-44cc-11e5-bc3b-0002a5d5c51b.ta
+af31c08684a97e16652991ece794a02fe6b1b2eb0d3cac87473896cf77bebb8e  67776  /usr/lib/optee_armtz/526fc4fc-7ee6-4a12-96e3-83da9565bce8.ta
+eb5bfa0e7135ff690fa814f74e9efd621c85c0aca0badee346addd878ce545b2  956576  /usr/lib/optee_armtz/8efb1e1c-37e5-4326-a5d6-8c33726c7d57.ta
+6d8cd6abbfa7222c42db589a4a6b0a580c9a132b87973b1196b395e26f5ed672  228336  /usr/lib/optee_armtz/9a04f079-9840-4286-ab92-e65be0885f95.ta  optional
+6bc9d3a93fd2ac8c5c272567c28ac047a8f831327d01fa58b077d8b482ebe845  917792  /usr/lib/optee_armtz/e043cde0-61d0-11e5-9c26-0002a5d5c51b.ta
+7beb535bea4b693fa36615dc4181946f2e1dfd8aa4dc64a8ed07d449d516d2e3  79424  /usr/lib/optee_armtz/e92a43ab-b4c8-4450-aa12-b1516259613b.ta
+03d02b0dd6cc5fb887e7fbea886617ca817dfabb62f9a9e77545cf3747e1c19e  64848  /usr/lib/optee_armtz/ff2a4bea-ef6d-11e6-89cc-d4ae52a7b3b3.ta
+5c123c345b5ee6f8e8c17707a82016f81f5c25a8fc6f04fb5214cf30cca7d0ad  18509  /usr/lib/firmware/chiron-fs2105-woofer.cfg
+5a3284b6efff5796c0255c73dc56af0fbc6766ef06257ef79b377c3e43eed553  18510  /usr/lib/firmware/chiron-fs2105-tweeters.cfg

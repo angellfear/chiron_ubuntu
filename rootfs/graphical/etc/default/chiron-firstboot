@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# The account the released image creates on its first boot. Edited here rather
+# than baked into the image, so a rebuild is not needed to change it -- and so
+# an integrator can drop a different file in before shipping.
+#
+# The image is deliberately shipped without this account already present. A
+# public image carrying a pre-made home directory would ship whatever ended up
+# in it, and every copy of the image would share the same uid, the same
+# ~/.config and, if any credential ever landed there, the same secret.
+
+USERNAME=user
+FULLNAME=user
+PASSWORD=1234
+
+# dialout for the UART, video/render for DRM and the Mali, input for libinput,
+# audio for ALSA, netdev so NetworkManager accepts changes from the panel,
+# plugdev for udisks, sudo for administration. This mirrors what a desktop
+# Ubuntu install gives its first account, minus the groups this board has no
+# hardware for.
+GROUPS=sudo,dialout,audio,video,render,input,plugdev,netdev,users
+
+# Set to 1 to force a password change at the first *interactive* login. Off by
+# default because the session autologins: an expired password stops greetd's
+# initial_session from starting at all, and this appliance would boot to a
+# black screen with no keyboard to fix it from.
+EXPIRE_PASSWORD=0

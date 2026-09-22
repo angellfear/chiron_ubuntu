@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 44/44] media: amlcam: refuse to allocate raw buffers without a
+ frame geometry
+
+adap_alloc_raw_buffs computed a zero buffer size when no subdevice format
+had been set yet and allocated nothing, and its caller ignored the result.
+Report the error and stop the write path instead.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlcam/cam_adapter/aml_adapter.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/amlisp/amlcam/cam_adapter/aml_adapter.c b/drivers/amlisp/amlcam/cam_adapter/aml_adapter.c
+index 75ef0c3ed..3dbf0bae1 100644
+--- a/drivers/amlisp/amlcam/cam_adapter/aml_adapter.c
++++ b/drivers/amlisp/amlcam/cam_adapter/aml_adapter.c
+@@ -233,6 +233,11 @@ static int adap_alloc_raw_buffs(struct adapter_dev_t *a_dev)
+ 
+ 	bsize = fcnt * fsize + fsize;
+ 
++	if (bsize == 0) {
++		pr_err("Error: no frame geometry; set the subdev format first\n");
++		return -EINVAL;
++	}
++
+ 	rtn = aml_subdev_cma_alloc(a_dev->pdev, &paddr, virtaddr, bsize);
+ 	if (rtn != 0) {
+ 		pr_err("Failed to alloc raw buff\n");
+@@ -593,11 +598,16 @@ static int adap_request_irq_offline(struct adapter_dev_t *adap_dev)
+ 
+ static int adap_subdev_stream_on(void *priv)
+ {
++	int rtn = 0;
+ 	struct adapter_dev_t *adap_dev = priv;
+ 
+ 	adap_dev->wstatus = STATUS_START;
+ 
+-	adap_alloc_raw_buffs(adap_dev);
++	rtn = adap_alloc_raw_buffs(adap_dev);
++	if (rtn) {
++		adap_dev->wstatus = STATUS_STOP;
++		return rtn;
++	}
+ 
+ 	adap_wdr_cfg_buf(adap_dev);
+ 

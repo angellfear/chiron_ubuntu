@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Publish the Chiron camera as a restart-safe V4L2 device
+Requires=chiron-camera-modules.service
+After=chiron-camera-modules.service
+Before=chiron-camera-privacy.service
+StartLimitIntervalSec=30
+StartLimitBurst=3
+# The ISP runtime is installed on the board by chiron-vendor-fetch, not
+# shipped in the image; until it has arrived there is no camera to publish.
+ConditionPathExists=/usr/lib/chiron-camera/ispService
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/lib/chiron-camera/chiron-camera-bridge
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=5
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

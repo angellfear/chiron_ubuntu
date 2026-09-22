@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 42/44] media: amlcam: re-enable the ISP timing generator on
+ every stream start
+
+isp_hw_start left the timing generator in whatever state the previous
+stream ended in, so a second STREAMON produced no frames.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlcam/cam_isp/hw/aml_isp_hw.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/amlisp/amlcam/cam_isp/hw/aml_isp_hw.c b/drivers/amlisp/amlcam/cam_isp/hw/aml_isp_hw.c
+index 84fc5a379..df30fa739 100644
+--- a/drivers/amlisp/amlcam/cam_isp/hw/aml_isp_hw.c
++++ b/drivers/amlisp/amlcam/cam_isp/hw/aml_isp_hw.c
+@@ -768,6 +768,7 @@ static void isp_hw_stream_off(struct aml_video *video)
+ static void isp_hw_start(struct isp_dev_t *isp_dev)
+ {
+ 	isp_top_enable(isp_dev);
++	isp_timgen_enable(isp_dev);
+ 
+ 	pr_info("ISP%u: hw start\n", isp_dev->index);
+ }

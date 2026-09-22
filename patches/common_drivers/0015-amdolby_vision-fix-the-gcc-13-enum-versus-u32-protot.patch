@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 15/44] amdolby_vision: fix the gcc 13 enum-versus-u32
+ prototype mismatches
+
+Validated on this board.
+---
+ drivers/media/enhancement/amdolby_vision/amdv_hw.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/enhancement/amdolby_vision/amdv_hw.c b/drivers/media/enhancement/amdolby_vision/amdv_hw.c
+index 525937cf8..8de5d61cf 100644
+--- a/drivers/media/enhancement/amdolby_vision/amdv_hw.c
++++ b/drivers/media/enhancement/amdolby_vision/amdv_hw.c
+@@ -124,7 +124,7 @@ struct vpp_post_info_t core3_slice_info;
+  *  0: osd is disabled
+  *  1: osd is enabled
+  */
+-static int (*get_osd_status)(enum OSD_INDEX index);
++static int (*get_osd_status)(u32 index);
+ 
+ bool get_core2_enable_info(enum OSD_INDEX index)
+ {
+@@ -6353,7 +6353,7 @@ int get_operate_mode(void)
+ 	return operate_mode;
+ }
+ 
+-int register_osd_func(int (*get_osd_enable_status)(enum OSD_INDEX index))
++int register_osd_func(int (*get_osd_enable_status)(u32 index))
+ {
+ 	pr_info("register osd enable status func\n");
+ 	get_osd_status = get_osd_enable_status;

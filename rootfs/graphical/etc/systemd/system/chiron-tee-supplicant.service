@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Chiron OP-TEE supplicant
+Documentation=https://github.com/OP-TEE/optee_client
+# The supplicant is the normal-world half of the secure world: it services the
+# RPC the TEE makes for secure storage and for loading TAs, so nothing that
+# opens a session can work before it runs. This used to be ordered after a
+# unit that insmod'ed optee.ko from the Android /cache partition; here
+# the module is in the image and modules-load.d loads it, so the device node is
+# what this waits for.
+ConditionPathExists=/dev/teepriv0
+After=local-fs.target systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tee-supplicant
+Restart=on-failure
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

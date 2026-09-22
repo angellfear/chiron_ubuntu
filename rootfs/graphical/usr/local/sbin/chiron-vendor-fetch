@@ -1,0 +1,158 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Install the Amlogic binary userspace on the board, once, from its publisher.
+#
+# The hardware video, ISP and NPU paths run on proprietary Amlogic libraries:
+# libion, libge2d, the encoders, the GStreamer plugins that use them, the ADLA
+# user-mode driver and the ISP runtime the camera service is made of. Khadas
+# publishes them for Amlogic boards, but with no licence text at all, so this
+# image does not carry them -- a copy in the image would be a copy its
+# distributor hands out. The image carries a list instead, pinned by URL and
+# SHA-256 from sources.lock, and the board downloads the files from where
+# Khadas publishes them.
+#
+# When. This runs at boot after the network is online, and the NetworkManager
+# dispatcher starts it again whenever a connection comes up, so the first
+# network the owner joins is enough -- no reboot needed. Without a network it
+# exits 0 and says so: that is a state to wait out, not a failure. Once
+# everything is installed it records the manifest's checksum and is a no-op on
+# every later boot; a new manifest in a new image installs again.
+#
+# What stays off until then: hardware video encode, GE2D, the NPU runtime and
+# the camera. The camera units carry ConditionPathExists on ispService, so they
+# are skipped cleanly rather than failing, and are started here once the
+# runtime has arrived.
+set -eu
+
+manifest=/usr/local/lib/chiron/vendor-packages.manifest
+stamp=/var/lib/chiron/vendor-packages.done
+camera_dir=/usr/lib/chiron-camera
+desktop_uid=1000
+
+# stderr: fetch() below hands its result back on stdout.
+log() { printf '[vendor-fetch] %s\n' "$*" >&2; }
+
+# The same best-effort desktop notification chiron-firmware-import uses.
+notify() {
+    [ -d "/run/user/$desktop_uid" ] || return 0
+    bus=/run/user/$desktop_uid/bus
+    [ -S "$bus" ] || return 0
+    command -v notify-send >/dev/null 2>&1 || return 0
+    user=$(getent passwd "$desktop_uid" | cut -d: -f1) || return 0
+    [ -n "$user" ] || return 0
+    runuser -u "$user" -- \
+        env "DBUS_SESSION_BUS_ADDRESS=unix:path=$bus" \
+        notify-send -a "Пакеты Amlogic" -i system-software-install "$1" "$2" \
+        >/dev/null 2>&1 || true
+}
+
+report() {
+    log "$1: $2"
+    notify "$1" "$2"
+}
+
+[ "$(id -u)" -eq 0 ] || { log "ERROR: root privileges are required" >&2; exit 2; }
+[ -r "$manifest" ] || { log "ERROR: $manifest is missing" >&2; exit 2; }
+
+want=$(sha256sum "$manifest" | cut -d' ' -f1)
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+    exit 0
+fi
+
+work=$(mktemp -d /var/tmp/chiron-vendor-fetch.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+
+# Fetch one file and hold it to its pinned checksum. A download that does not
+# match is never used; it is deleted and reported, and returns 3 so the caller
+# can tell it from a network failure, which is only retried later.
+fetch() {
+    url=$1
+    sha=$2
+    file=$work/$(basename "$url")
+    if ! curl -fsSL --retry 2 --connect-timeout 15 --max-time 600 \
+            -o "$file" "$url"; then
+        return 1
+    fi
+    if [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$sha" ]; then
+        rm -f "$file"
+        report "Пакеты Amlogic не установлены" \
+"Файл не совпал с контрольной суммой:
+$url"
+        return 3
+    fi
+    printf '%s\n' "$file"
+}
+
+# Offline is the normal state before the owner has joined a network. Probe the
+# first source rather than trusting NetworkManager's idea of connectivity.
+first_url=$(awk '$1 == "deb" || $1 == "ispaml" { print $2; exit }' "$manifest")
+if ! curl -fsI --connect-timeout 10 --max-time 20 "$first_url" >/dev/null 2>&1; then
+    log "no network yet; will run again when a connection comes up"
+    exit 0
+fi
+
+fetch_failed() {
+    [ "$1" -eq 3 ] && exit 1
+    log "download failed, will retry: $2"
+    exit 0
+}
+
+debs=""
+isp_deb=""
+while read -r kind url sha inner inner_sha; do
+    case "$kind" in
+        deb)
+            file=$(fetch "$url" "$sha") || fetch_failed $? "$url"
+            debs="$debs $file"
+            ;;
+        ispaml)
+            archive=$(fetch "$url" "$sha") || fetch_failed $? "$url"
+            mkdir -p "$work/ispaml"
+            tar -xzf "$archive" -C "$work/ispaml"
+            isp_deb=$(find "$work/ispaml" -path "*/$inner" -print -quit)
+            [ -n "$isp_deb" ] || { report "Пакеты Amlogic не установлены" "В архиве нет $inner"; exit 1; }
+            if [ "$(sha256sum "$isp_deb" | cut -d' ' -f1)" != "$inner_sha" ]; then
+                report "Пакеты Amlogic не установлены" "$inner не совпал с контрольной суммой"
+                exit 1
+            fi
+            ;;
+        ''|\#*) ;;
+        *) log "ERROR: unknown manifest entry: $kind" >&2; exit 2 ;;
+    esac
+done <"$manifest"
+
+# All together, as the image build used to: their only dependencies are each
+# other and the GStreamer runtime the image already has.
+if [ -n "$debs" ]; then
+    # A run cut short by a reboot leaves dpkg half-configured; finish that
+    # first so this run starts from a consistent database.
+    DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+    # shellcheck disable=SC2086
+    DEBIAN_FRONTEND=noninteractive dpkg -i $debs
+    ldconfig
+    log "installed:$(for f in $debs; do printf ' %s' "$(basename "$f")"; done)"
+fi
+
+# The ISP runtime is not installed as a package: the camera units expect
+# ispService and its four libraries next to the adapter in $camera_dir.
+if [ -n "$isp_deb" ]; then
+    dpkg-deb -x "$isp_deb" "$work/ispaml-root"
+    install -d -m 755 "$camera_dir"
+    install -m 0755 "$work/ispaml-root/usr/local/bin/ispService" "$camera_dir/ispService.new"
+    for library in libispaml.so libmediaAPI.so libsns.so liblens.so; do
+        install -m 0644 "$work/ispaml-root/usr/lib/$library" "$camera_dir/$library"
+    done
+    # ispService last: it is what the camera units' condition looks for.
+    mv -f "$camera_dir/ispService.new" "$camera_dir/ispService"
+    log "installed the ISP runtime into $camera_dir"
+fi
+
+install -d -m 755 "$(dirname "$stamp")"
+printf '%s\n' "$want" >"$stamp"
+
+systemctl --no-block start chiron-camera-modules.service \
+    chiron-camera-bridge.service chiron-camera-privacy.service || true
+
+report "Пакеты Amlogic установлены" \
+"Аппаратное видео, камера и NPU готовы к работе."

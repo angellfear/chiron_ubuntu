@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 29/44] media: h264: apply the T7C packed crop to the runtime
+ geometry
+
+Validated on this board.
+---
+ .../frame_provider/decoder_v4l/h264_multi/vmh264.c          | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+index 3b572fc4e..333373dd5 100644
+--- a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
++++ b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+@@ -5976,7 +5976,11 @@ static int vh264_set_params(struct vdec_h264_hw_s *hw,
+ 				break;
+ 		}
+ 
+-		if (chroma_format_idc == 0) {
++		/* T7C crop ABI: runtime geometry uses packed pixel totals. */
++		if (is_cpu_t7() || is_cpu_t7c()) {
++			crop_right = p_H264_Dpb->frame_crop_left_offset;
++			crop_bottom = p_H264_Dpb->frame_crop_right_offset;
++		} else if (chroma_format_idc == 0) {
+ 			crop_right = p_H264_Dpb->frame_crop_right_offset;
+ 			crop_bottom = p_H264_Dpb->frame_crop_bottom_offset *
+ 				(2 - frame_mbs_only_flag);

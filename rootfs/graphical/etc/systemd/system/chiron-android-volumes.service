@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Prepare read-only Android volumes for the desktop file manager
+Documentation=file:/usr/local/sbin/chiron-prepare-android-volumes
+After=local-fs.target chiron-firstboot.service chiron-tee-supplicant.service
+Requires=chiron-firstboot.service
+Wants=chiron-tee-supplicant.service
+Before=greetd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-prepare-android-volumes
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

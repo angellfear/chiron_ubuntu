@@ -1,0 +1,7 @@
+# One relative patch path per line after hardware acceptance.
+0001-aml_drv-build-the-W2-fullmac-driver-on-Linux-5.15.patch
+0002-aml_drv-leave-post-recovery-reconnect-to-userspace.patch
+0003-w2-do-not-recover-while-shutting-down.patch
+0004-w2-rate-limit-scan-payload-buffer-wrap.patch
+0005-w2-keep-normal-command-traces-at-debug-level.patch
+0006-w2-keep-the-special-frame-trace-at-debug-level.patch

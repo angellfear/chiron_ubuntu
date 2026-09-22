@@ -1,0 +1,69 @@
+This repository is not under a single licence, and every file says which one
+applies to it. The SPDX-License-Identifier line at the top of a file is the
+authoritative answer for that file; what follows is the map.
+
+
+0BSD -- everything written for this project
+-------------------------------------------------------------------------------
+
+    LICENSES/0BSD.txt
+
+The build system, the scripts, the rootfs overlay, the userspace sources, the
+profiles, the configuration and the documentation are under the BSD Zero Clause
+Licence: use it, copy it, change it, ship it, sell it, with or without credit
+and without asking. There is no notice to keep and no condition to meet.
+
+This is deliberate. The work is given away. Nobody should have to carry a name
+around to be allowed to use it.
+
+The 0BSD grant above covers what this project wrote, and only that. One data
+file sitting in those same directories is not this project's work and is not
+given away here -- the camera's factory calibration table, measured by others.
+THIRD_PARTY.md names it and says what is known about it. Nothing this project
+does not own is relicensed by this file.
+
+
+GPL-2.0 -- the kernel parts, because they cannot be anything else
+-------------------------------------------------------------------------------
+
+    LICENSES/GPL-2.0.txt
+
+    patches/**
+    drivers/**
+
+These are modifications to, and loadable modules for, the Linux kernel. They
+are derivative works of GPL-2.0 code, so GPL-2.0 is not a choice made here --
+it is what that code already requires.
+
+Two files under drivers/ are third-party GPL-2.0 code carried in unchanged and
+keep their original authors' notices:
+
+    drivers/audio/es7210/  (c) Everest Semiconductor Co., Ltd.
+
+An image built from this repository contains a modified Linux kernel. GPL-2.0
+§3 obliges whoever distributes such an image to provide the corresponding
+source. sources.lock pins every upstream tree by commit and patches/ carries
+every change applied to them; scripts/builder/export-sources.sh packs those
+trees, as built, into an archive to ship with the image.
+
+
+Vendor firmware and libraries -- not here
+-------------------------------------------------------------------------------
+
+No vendor firmware is in this repository: not the touch controller's, not the
+Zigbee coordinator's, not Amlogic's trusted applications, video microcode or
+Bluetooth firmware, and not the amplifier tuning. This project has no
+redistribution grant for any of it. What the repository carries instead is a
+list naming those files and where they belong; the board copies them out of
+its own storage on first boot, so what ends up in /usr/lib is a copy the owner
+made from their own device.
+
+The Amlogic binary libraries are not here either. The image carries their URLs
+and checksums, and the board downloads them from Khadas.
+
+One vendor file does go into the image: the W2 Wi-Fi firmware and its RF
+table, from Khadas' public driver repository. THIRD_PARTY.md says why.
+
+
+THIRD_PARTY.md records every piece of third-party material in here, where it
+came from and on what terms.

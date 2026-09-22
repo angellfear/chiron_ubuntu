@@ -1,0 +1,27 @@
+From cfafe3adad0675a50d9db45c42bd189a7751c16f Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Tue, 1 Sep 2026 23:30:53 +0000
+Subject: [PATCH] arm64: dts: Chiron: skip unused Broadcom WiFi buffers
+
+Change-Id: Iac1aca81a97fac7a8eb9ae2d1b13aaa2c9e68367
+---
+ arch/arm64/boot/dts/amlogic/chiron.dts | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+index 1be51aa96..e37423e87 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -2085,7 +2085,8 @@
+  */
+ &aml_wifi {
+ 	status = "okay";
+-	dhd_static_buf;
++	/* W2 has its own allocator; the inherited buffer is for Broadcom DHD. */
++	/delete-property/ wifi_static_buf;
+ 	interrupt-gpios = <&gpio GPIOC_3 GPIO_ACTIVE_HIGH>;
+ 	power_on-gpios = <&gpio GPIOC_4 GPIO_ACTIVE_HIGH>;
+ };
+-- 
+2.43.0
+

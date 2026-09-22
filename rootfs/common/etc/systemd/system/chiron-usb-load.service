@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load the Yandex Chiron USB host driver
+After=local-fs.target
+# Input devices plugged in at boot should exist before the session claims them,
+# and a stick should be mounted by the time the desktop shows a file manager.
+Before=greetd.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+ExecStart=/bin/bash /usr/local/lib/chiron/load-usb.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

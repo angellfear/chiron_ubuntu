@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 14/44] media: fix the gcc 13 enum-versus-u32 prototype
+ mismatches
+
+Validated on this board.
+---
+ drivers/media/di_multi/di_dbg.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/di_multi/di_dbg.c b/drivers/media/di_multi/di_dbg.c
+index b924e2de4..adfdcec3c 100644
+--- a/drivers/media/di_multi/di_dbg.c
++++ b/drivers/media/di_multi/di_dbg.c
+@@ -618,7 +618,7 @@ void ddbg_sw(bool on)
+ }
+ #else
+ 
+-void ddbg_sw(enum EDI_LOG_TYPE mode, bool on)
++void ddbg_sw(unsigned int mode, bool on)
+ {
+ 	struct di_dbg_reg_log *plog = get_dbg_reg_log();
+ 

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 30/44] media: h264: apply the T7C packed crop to the exported
+ stream info
+
+Validated on this board.
+---
+ .../frame_provider/decoder_v4l/h264_multi/vmh264.c          | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+index 333373dd5..3b454cefa 100644
+--- a/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
++++ b/drivers/media_modules/frame_provider/decoder_v4l/h264_multi/vmh264.c
+@@ -10175,7 +10175,11 @@ static int vmh264_get_ps_info(struct vdec_h264_hw_s *hw,
+ 			break;
+ 	}
+ 
+-	if (chroma_format_idc == 0) {
++	/* T7C crop ABI: exported stream info uses packed pixel totals. */
++	if (is_cpu_t7() || is_cpu_t7c()) {
++		crop_right = hw->dpb.frame_crop_left_offset;
++		crop_bottom = hw->dpb.frame_crop_right_offset;
++	} else if (chroma_format_idc == 0) {
+ 		crop_right = hw->dpb.frame_crop_right_offset;
+ 		crop_bottom = hw->dpb.frame_crop_bottom_offset *
+ 			(2 - frame_mbs_only_flag);

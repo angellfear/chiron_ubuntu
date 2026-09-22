@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+Package: firefox firefox-* chromium chromium-*
+Pin: origin apt.armbian.com
+Pin-Priority: 1001

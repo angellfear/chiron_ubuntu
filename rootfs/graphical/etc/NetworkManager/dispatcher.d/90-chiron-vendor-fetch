@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Start the Amlogic userspace install as soon as a connection is up, so the
+# first network the owner joins is enough. The unit itself exits at once when
+# everything is already installed.
+case "$2" in
+    up|connectivity-change)
+        [ -f /var/lib/chiron/vendor-packages.done ] \
+            && [ "$(cat /var/lib/chiron/vendor-packages.done)" = \
+                 "$(sha256sum /usr/local/lib/chiron/vendor-packages.manifest | cut -d' ' -f1)" ] \
+            && exit 0
+        systemctl --no-block start chiron-vendor-fetch.service
+        ;;
+esac
+exit 0

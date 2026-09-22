@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 05/44] media: fb: export osd_enable_display for the
+ display-only path
+
+Validated on this board.
+---
+ drivers/media/media_main.c | 17 +++++++++++++++++
+ drivers/media/media_main.h |  5 +++++
+ drivers/media/osd/osd_fb.c |  9 +++++++++
+ drivers/media/osd/osd_fb.h |  1 +
+ 4 files changed, 32 insertions(+)
+
+diff --git a/drivers/media/media_main.c b/drivers/media/media_main.c
+index e58f7cf3c..207f5b130 100644
+--- a/drivers/media/media_main.c
++++ b/drivers/media/media_main.c
+@@ -20,6 +20,10 @@
+ #include <linux/amlogic/gki_module.h>
+ #include "media_main.h"
+ 
++static bool display_only;
++module_param(display_only, bool, 0644);
++MODULE_PARM_DESC(display_only, "Initialize only the Chiron LCD display stack");
++
+ //#define DEBUG
+ #define call_sub_init(func) \
+ { \
+@@ -78,6 +82,19 @@ static int __init media_main_init(void)
+ 	call_sub_init(dummy_venc_init);
+ 	call_sub_init(vout_sys_serve_init);
+ 	call_sub_init(vout_init_module);
++	if (display_only) {
++		call_sub_init(vpu_security_init);
++		call_sub_init(osd_init_module);
++		call_sub_init(ion_device_create_init);
++		call_sub_init(ion_system_contig_heap_create_init);
++		call_sub_init(ion_system_heap_create_init);
++		call_sub_init(add_meson_cma_heap);
++		call_sub_init(amlogic_heap_secure_dma_buf_init);
++		call_sub_init(mua_init);
++		call_sub_init(osd_enable_display);
++		pr_debug("### %s() display-only end\n", __func__);
++		return 0;
++	}
+ #ifdef CONFIG_AMLOGIC_VOUT2_SERVE
+ 	call_sub_init(vout2_init_module);
+ #endif
+diff --git a/drivers/media/media_main.h b/drivers/media/media_main.h
+index eba4335d3..f104cc9dc 100644
+--- a/drivers/media/media_main.h
++++ b/drivers/media/media_main.h
+@@ -124,11 +124,16 @@ static inline int dsc_enc_init(void)
+ 
+ #ifdef CONFIG_AMLOGIC_MEDIA_FB
+ int osd_init_module(void);
++int osd_enable_display(void);
+ #else
+ static inline int osd_init_module(void)
+ {
+ 	return 0;
+ }
++static inline int osd_enable_display(void)
++{
++	return 0;
++}
+ #endif
+ 
+ #ifdef CONFIG_AMLOGIC_VOUT_CLK_SERVE
+diff --git a/drivers/media/osd/osd_fb.c b/drivers/media/osd/osd_fb.c
+index a6d077edc..35298b11d 100644
+--- a/drivers/media/osd/osd_fb.c
++++ b/drivers/media/osd/osd_fb.c
+@@ -1779,6 +1779,15 @@ static int osd_open(struct fb_info *info, int arg)
+ 	return 0;
+ }
+ 
++int osd_enable_display(void)
++{
++	struct osd_fb_dev_s *fbdev = gp_fbdev_list[DEV_OSD0];
++
++	if (!fbdev || !fbdev->fb_info)
++		return -ENODEV;
++	return osd_open(fbdev->fb_info, 0);
++}
++
+ static int osd_mmap(struct fb_info *info, struct vm_area_struct *vma)
+ {
+ 	unsigned long mmio_pgoff;
+diff --git a/drivers/media/osd/osd_fb.h b/drivers/media/osd/osd_fb.h
+index 40bcfdef1..c0cc7f3f0 100644
+--- a/drivers/media/osd/osd_fb.h
++++ b/drivers/media/osd/osd_fb.h
+@@ -58,6 +58,7 @@ void *aml_mm_vmap(phys_addr_t phys, unsigned long size);
+ void *aml_map_phyaddr_to_virt(dma_addr_t phys, unsigned long size);
+ void aml_unmap_phyaddr(u8 *vaddr);
+ phys_addr_t get_fb_rmem_paddr(int index);
++int osd_enable_display(void);
+ void __iomem *get_fb_rmem_vaddr(int index);
+ size_t get_fb_rmem_size(int index);
+ int osd_blank(int blank_mode, struct fb_info *info);

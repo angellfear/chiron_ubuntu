@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-output0", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess", SYMLINK+="chiron-camera-hw"
+# The loopback node is created by the root-owned camera bridge before the
+# desktop seat's uaccess helper is guaranteed to be ready.  Keep access
+# deterministic for the desktop account through its normal video group;
+# relying on uaccess here can leave the node at mode 000 after boot.
+SUBSYSTEM=="video4linux", ATTR{name}=="ChironCamera", GROUP="video", MODE="0660", TAG-="uaccess", SYMLINK+="chiron-camera v4l/by-id/chiron-ov13b10"
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-ddr-input", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-param", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-stats", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-output[1-3]", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"
+SUBSYSTEM=="video4linux", ATTR{name}=="isp-raw", OWNER="root", GROUP="root", MODE="0600", TAG-="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="switches", TAG+="uaccess"

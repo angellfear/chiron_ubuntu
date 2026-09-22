@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 37/44] media: amlsens: make the sensor pwdn GPIO optional and
+ reported
+
+The sensor power-down line is not present on every board. Request it as
+optional and fail with the real error instead of dereferencing an ERR_PTR
+when the request goes wrong.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlsens/aml_sens.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/drivers/amlisp/amlsens/aml_sens.c b/drivers/amlisp/amlsens/aml_sens.c
+index 74d2ce9f3..170187014 100644
+--- a/drivers/amlisp/amlsens/aml_sens.c
++++ b/drivers/amlisp/amlsens/aml_sens.c
+@@ -201,6 +201,16 @@ static int sensor_parse_power(struct amlsens *sensor)
+ 		goto err_return;
+ 	}
+ 
++	sensor->gpio.pwdn_gpio = devm_gpiod_get_optional(sensor->dev,
++												"pwdn",
++												 GPIOD_OUT_LOW);
++	if (IS_ERR(sensor->gpio.pwdn_gpio))
++	{
++		rtn = PTR_ERR(sensor->gpio.pwdn_gpio);
++		dev_err(sensor->dev, "Cannot get pwdn gpio: %d\n", rtn);
++		goto err_return;
++	}
++
+ 	// IRCUT - OS08A10 PIN21 - IRCUT
+ 	//		 - IMX415 PIN21 - RESET
+ 	//		 - IMX585 PIN21 - NC

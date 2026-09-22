@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Select the performance CPU frequency governor
+Documentation=file:/usr/local/sbin/chiron-cpufreq
+# amlogic_cpufreq has no module alias and is loaded by systemd-modules-load
+# from /etc/modules-load.d/chiron-cpufreq.conf. That unit runs before
+# sysinit.target, and an ordinary service is ordered after sysinit.target by
+# its default dependencies, so the policies exist by the time this starts.
+# No ConditionPathExistsGlob on purpose: a missing policy is a fault to report,
+# not a reason to skip quietly.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-cpufreq
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

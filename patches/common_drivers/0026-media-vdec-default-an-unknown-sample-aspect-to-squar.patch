@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 26/44] media: vdec: default an unknown sample aspect to square
+ pixels
+
+Validated on this board.
+---
+ drivers/media_modules/amvdec_ports/aml_vcodec_dec.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index 7be6faa9e..d1acde67c 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -5401,6 +5401,10 @@ static int vidioc_vdec_g_pixelaspect(struct file *file, void *fh,
+ 	height_aspect_ratio = ctx->height_aspect_ratio;
+ 	width_aspect_ratio = ctx->width_aspect_ratio;
+ 
++	/* Unknown sample aspect means square pixels, never a successful 0/0. */
++	aspect->numerator = 1;
++	aspect->denominator = 1;
++
+ 	if ((height_aspect_ratio != 0) && (width_aspect_ratio != 0)) {
+ 		aspect->numerator = height_aspect_ratio;
+ 		aspect->denominator = width_aspect_ratio;

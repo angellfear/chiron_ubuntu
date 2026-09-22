@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Appended to the initramfs-tools scripts/local file. The later shell
+# definition wins, so this mountroot replaces the standard local-disk one.
+#
+# Boot contract (validated on Chiron hardware via an Armbian dual-boot
+# chain): the stock Amlogic U-Boot boot menu loads Image, this initrd and the
+# Chiron DTB from an ext4 partition; the kernel command line carries
+# chiron_dir=<dir>      the Ubuntu directory on that partition
+# chiron_image=<name>   the squashfs to boot, a plain file name inside it
+# chiron_overlay=<name> the writable overlay directory, likewise inside it
+#
+# Layout inside chiron_dir -- flat, with the images side by side:
+#
+#   <chiron_dir>/graphical.sqfs
+#   <chiron_dir>/other.sqfs            anything, named by chiron_image
+#   <chiron_dir>/overlay/{upper,work}  named by chiron_overlay
+#   <chiron_dir>/{Image,initrd.img,chiron.dtb,modules/}
+#
+# Image and overlay are named independently so several images can share one
+# writable state -- so a newer image keeps the same provisioning and home as
+# the one it replaces -- while a throwaway image can be given an overlay of
+# its own and leave the working one alone. The cost of sharing is that state
+# written under one image is visible to the next; that is the intended trade.
+#
+# The squashfs is mounted read-only as the overlay lower layer, with a tmpfs
+# fallback for read-only media. Handoff is a chroot exec of init: this vendor
+# kernel cannot pivot_root from the ELF boot menu path, so run-init/switch_root
+# must not be used.
+
+mountroot() {
+    local boot_dir=${chiron_dir:-/ubuntu}
+    local image_name=${chiron_image:-graphical.sqfs}
+    local overlay_name=${chiron_overlay:-overlay}
+    local part found="" image="" candidate
+
+    # Reject anything that is not a plain name: these come off the kernel
+    # command line and are pasted straight into mount paths below.
+    case "$image_name$overlay_name" in
+        */*|*..*) panic "chiron_image/chiron_overlay must be plain names" ;;
+    esac
+
+    # Do not depend on the generated initramfs carrying these: without /mnt
+    # every mount below fails and the scan reports a missing image.
+    mkdir -p /mnt /lower
+
+    # The named image first; <boot_dir>/rootfs.sqfs second, which is the layout
+    # before the images were named. Keeping the old name bootable means an
+    # initrd built from this tree still comes up on a board deployed before the
+    # split, instead of turning a partial rollout into an unbootable device.
+    for part in /dev/mmcblk*p* /dev/sd*[0-9]*; do
+        [ -b "$part" ] || continue
+        mount -t ext4 -o ro "$part" /mnt 2>/dev/null || continue
+        for candidate in "$boot_dir/$image_name" "$boot_dir/rootfs.sqfs"; do
+            if [ -f "/mnt/$candidate" ]; then
+                found=$part
+                image=$candidate
+                break
+            fi
+        done
+        [ -n "$found" ] && break
+        umount /mnt
+    done
+
+    if [ -z "$found" ]; then
+        echo "mountroot: no $boot_dir/$image_name (nor $boot_dir/rootfs.sqfs) on any ext4 partition" >&2
+        panic "Chiron root not found"
+    fi
+    echo "mountroot: booting $image from $found, overlay $boot_dir/$overlay_name" >&2
+
+    # BusyBox losetup has no -j: ask for a free device, attach it explicitly,
+    # and fall back to the mount helper's own loop handling.
+    local loop=""
+    loop=$(losetup -f 2>/dev/null) || loop=""
+    if [ -n "$loop" ] && losetup "$loop" "/mnt/$image" 2>/dev/null; then
+        mount -t squashfs -o ro "$loop" /lower || panic "cannot mount squashfs"
+    else
+        mount -t squashfs -o ro,loop "/mnt/$image" /lower ||
+            panic "cannot mount squashfs"
+    fi
+
+    local upper work
+    if mount -o remount,rw /mnt 2>/dev/null; then
+        upper="/mnt/$boot_dir/$overlay_name/upper"
+        work="/mnt/$boot_dir/$overlay_name/work"
+        mkdir -p "$upper" "$work"
+    else
+        # Read-only media: keep the overlay writable but volatile.
+        mkdir -p /tmp/overlay/upper /tmp/overlay/work
+        upper=/tmp/overlay/upper
+        work=/tmp/overlay/work
+    fi
+
+    mount -t overlay overlay \
+        -o "lowerdir=/lower,upperdir=$upper,workdir=$work,index=off,xino=off" \
+        "${rootmnt}" || panic "cannot mount overlay"
+
+    # Keep the boot partition mount available inside the running system.
+    mkdir -p "${rootmnt}/bootpart"
+    mount --bind /mnt "${rootmnt}/bootpart" 2>/dev/null || true
+
+    cd "${rootmnt}"
+    export ROOT=$boot_dir
+    exec chroot "${rootmnt}" /sbin/init
+}

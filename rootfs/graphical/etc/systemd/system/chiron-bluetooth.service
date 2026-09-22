@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Initialise and attach Chiron Amlogic W2 Bluetooth UART
+Requires=w2-load.service
+After=w2-load.service
+Before=bluetooth.service
+ConditionPathExists=/dev/ttyS1
+# Tie the controller's lifetime to bluetoothd's. Restarting bluetooth.service
+# on its own re-initialises a live adapter -- a second Powered transition on a
+# controller that is already up -- and that wedges the W2: hci0 stays UP
+# RUNNING while every command returns `tx timeout`, and only a reboot clears
+# it. Observed here after a bare `systemctl stop chiron-bluetooth.service`,
+# which propagates a stop to bluetooth.service through its Requires=, gets
+# bluetooth.service D-Bus-activated straight back by blueman, and has its own
+# stop job cancelled by the start that comes with it -- leaving bluetoothd
+# restarted against an adapter that was never power-cycled. PartOf= makes the
+# loader stop and start with bluetoothd, so the controller is always reloaded
+# from ROM underneath it and never re-initialised in place.
+PartOf=bluetooth.service
+
+[Service]
+# The loader holds the UART for as long as hci0 is to exist, so this is a
+# long-running service rather than the oneshot it was when btattach took the
+# port over. Stopping it returns the line discipline to N_TTY; ExecStopPost
+# then drops the platform rail, which removes the controller.
+Type=simple
+ExecStart=/usr/local/sbin/chiron-bluetooth
+ExecStopPost=-/usr/local/sbin/chiron-bluetooth --power-off
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=30
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

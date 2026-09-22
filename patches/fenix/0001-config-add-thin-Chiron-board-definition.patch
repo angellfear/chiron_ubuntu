@@ -1,0 +1,31 @@
+From 11e689ed48eeed6dd131af13d3313fd17a4c21cf Mon Sep 17 00:00:00 2001
+From: Chiron migration <chiron-migration@localhost>
+Date: Thu, 27 Aug 2026 18:19:24 +0000
+Subject: [PATCH 1/2] config: add thin Chiron board definition
+
+Reuse the locked VIM4 build plumbing and select only the Chiron DTB for Linux 5.15. This avoids copying the VIM4 board configuration into the integration delta.
+---
+ config/boards/Chiron.conf | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+ create mode 100644 config/boards/Chiron.conf
+
+diff --git a/config/boards/Chiron.conf b/config/boards/Chiron.conf
+new file mode 100644
+index 00000000..492029fd
+--- /dev/null
++++ b/config/boards/Chiron.conf
+@@ -0,0 +1,11 @@
++#!/bin/bash
++
++# Chiron shares the A311D2/T7C build plumbing with Khadas VIM4N.  Keep this
++# file as a narrow board delta instead of duplicating VIM4.conf.
++source config/boards/VIM4.conf
++
++case "$LINUX" in
++	5.15)
++		LINUX_DTB="$LINUX_COMMON_DRIVERS_DIR/arch/arm64/boot/dts/amlogic/chiron.dtb"
++		;;
++esac
+-- 
+2.43.0
+

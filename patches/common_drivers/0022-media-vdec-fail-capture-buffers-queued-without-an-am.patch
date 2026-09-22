@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 22/44] media: vdec: fail capture buffers queued without an
+ aml_buf
+
+Validated on this board.
+---
+ .../media_modules/amvdec_ports/aml_vcodec_dec.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index 7afc6c560..e165c1b22 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -4328,6 +4328,13 @@ static void vb2ops_vdec_buf_queue(struct vb2_buffer *vb)
+ 		struct aml_buf *aml_buf = buf->aml_buf;
+ 		struct vframe_s *vf;
+ 
++		if (!aml_buf) {
++			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
++				"capture buffer queued without aml_buf\n");
++			vb2_buffer_done(vb, VB2_BUF_STATE_ERROR);
++			return;
++		}
++
+ 		if (aml_buf->vb != vb) {
+ 			v4l_dbg(ctx, V4L_DEBUG_CODEC_BUFMGR,
+ 				"vb2 (old idx: %d new idx: %d) update\n",
+@@ -4629,6 +4636,10 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
+ 
+ 	if (!V4L2_TYPE_IS_OUTPUT(vb->type)) {
+ 		ulong key;
++
++		if (!ctx->bm.config.enable_extbuf)
++			aml_buf_configure_update(ctx);
++
+ 		if (vb->memory == VB2_MEMORY_DMABUF)
+ 			key = (ulong)vb->planes[0].dbuf;
+ 		else if (vb->memory == VB2_MEMORY_MMAP)
+@@ -4641,6 +4652,12 @@ static int vb2ops_vdec_buf_init(struct vb2_buffer *vb)
+ 				"aml_buf_attach fail!\n");
+ 			return ret;
+ 		}
++		if (!buf->aml_buf) {
++			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,
++				"capture buffer attach did not create aml_buf\n");
++			return -EINVAL;
++		}
++
+ 		ret = aml_uvm_buf_delay_alloc(ctx, vb2_v4l2);
+ 		if (ret) {
+ 			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,

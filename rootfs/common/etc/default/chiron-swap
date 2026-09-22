@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Read by /usr/local/sbin/chiron-swap.
+#
+# The swap is a zram device -- compressed pages in RAM -- and never a file.
+# That was learned the hard way: paging onto the ext4 that also carries the
+# squashfs and the overlay upper directory corrupted what the page cache handed
+# back on eviction. Do not introduce a FILE= here.
+
+# 1536M of zram on 2.9 GB of RAM. This is the *uncompressed* size the kernel
+# advertises; lzo-rle gets roughly 3:1 on anonymous pages, so the real cost is a
+# few hundred megabytes and only for pages actually paged out.
+SIZE=1536M
+
+# lzo-rle, not zstd: the swap path here is latency-bound, not space-bound, and
+# this kernel is built with CONFIG_ZRAM_DEF_COMP_LZORLE=y so it is also the
+# A kernel without lzo-rle would have to say plain lzo; this one
+# reports "lzo [lzo-rle] zstd".
+ALGORITHM=lzo-rle
+
+# Above anything else that might appear, so this is what gets used.
+PRIORITY=100

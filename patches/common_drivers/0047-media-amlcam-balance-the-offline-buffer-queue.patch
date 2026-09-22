@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Tue, 1 Sep 2026 05:00:00 +0000
+Subject: [PATCH] media: amlcam: balance the offline buffer queue
+
+The global adapter worker removed a completed RAW buffer from done_list and
+then leaked it whenever the userspace ISP context was closed. Repeated idle
+iterations eventually drained free_list and produced an unbounded
+"ADAP0:Error free list empty" interrupt-log storm.
+
+Return the buffer before retrying. Increase the asynchronous offline queue to
+four frames so ordinary pipeline latency does not force frames through the
+reserved drop buffer. Also make OV13B10 stream state follow successful
+hardware transitions and avoid taking a duplicate MCLK reference during
+initialisation, allowing repeated browser capture sessions to stop and start
+cleanly.
+---
+ drivers/amlisp/amlcam/cam_adapter/aml_adapt_global.c | 5 +++++
+ drivers/amlisp/amlcam/cam_adapter/aml_adapter.h      | 6 +++++-
+ drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c        | 18 ++++++++----------
+ 3 files changed, 18 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/amlisp/amlcam/cam_adapter/aml_adapt_global.c b/drivers/amlisp/amlcam/cam_adapter/aml_adapt_global.c
+index 1c6bebada..1e3a624b2 100644
+--- a/drivers/amlisp/amlcam/cam_adapter/aml_adapt_global.c
++++ b/drivers/amlisp/amlcam/cam_adapter/aml_adapt_global.c
+@@ -200,6 +200,11 @@ static int aml_adap_global_thread(void *data)
+ 		ret = isp_global_manual_apb_dma(g_info->done_buf->devno);
+ 		if (ret < 0) {
+ 			pr_err("isp %d close, user %d\n", g_info->done_buf->devno, g_info->user);
++			/* get_done_buf() removed this entry from done_list. Return it
++			 * before retrying; otherwise every closed-ISP iteration leaks a
++			 * RAW buffer permanently and the adapter free list drains.
++			 */
++			aml_adap_global_put_done_buf();
+ 			msleep(200);
+ 			continue;
+ 		}
+diff --git a/drivers/amlisp/amlcam/cam_adapter/aml_adapter.h b/drivers/amlisp/amlcam/cam_adapter/aml_adapter.h
+index aec28418c..e32821c95 100644
+--- a/drivers/amlisp/amlcam/cam_adapter/aml_adapter.h
++++ b/drivers/amlisp/amlcam/cam_adapter/aml_adapter.h
+@@ -182,7 +182,11 @@ struct adapter_dev_param {
+ 	Alig_param alig_param;
+ 	struct adap_exp_offset offset;
+ 
+-	struct aml_buffer ddr_buf[2];
++	/* The offline ISP path owns one buffer while the adapter fills the next.
++	 * Two entries leave no latency margin and force normal frames into the
++	 * reserved/drop buffer. Keep a four-frame queue for the asynchronous path.
++	 */
++	struct aml_buffer ddr_buf[4];
+ 	struct aml_buffer rsvd_buf;
+ 	struct aml_buffer *cur_buf;
+ 	struct aml_buffer *done_buf;
+diff --git a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
+index ce04aad91..d9efd9fb9 100644
+--- a/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
++++ b/drivers/amlisp/amlsens/ov13b10/aml_ov13b10.c
+@@ -626,9 +626,6 @@ static int ov13b10_set_stream(struct v4l2_subdev *sd, int enable)
+ 
+ 	if (ov13b10->status == enable)
+ 		return ret;
+-	else
+-		ov13b10->status = enable;
+-
+ 	if (enable) {
+ 		ret = ov13b10_start_streaming(ov13b10);
+ 		if (ret) {
+@@ -636,10 +633,14 @@ static int ov13b10_set_stream(struct v4l2_subdev *sd, int enable)
+ 			goto unlock_and_return;
+ 		}
+ 
++		ov13b10->status = 1;
+ 		dev_info(ov13b10->dev, "stream on\n");
+ 	} else {
+-		ov13b10_stop_streaming(ov13b10);
++		ret = ov13b10_stop_streaming(ov13b10);
++		if (ret)
++			goto unlock_and_return;
+ 
++		ov13b10->status = 0;
+ 		dev_info(ov13b10->dev, "stream off\n");
+ 	}
+ 
+@@ -916,12 +917,11 @@ int ov13b10_init(struct i2c_client *client, void *sdrv)
+ 
+ 	mutex_init(&ov13b10->lock);
+ 
+-	/* Power on the device to match runtime PM state below */
+-	ret = ov13b10_power_on(ov13b10->dev, ov13b10->gpio);
+-	if (ret < 0) {
+-		dev_err(dev, "Could not power on the device\n");
+-		return -ENODEV;
+-	}
++	/* sensor_id_detect() leaves the detected sensor powered. Do not take a
++	 * second MCLK reference here: the vendor media pipeline keeps that one
++	 * clock reference while the subdevice is registered and controls actual
++	 * capture with STREAMON/STREAMOFF.
++	 */
+ 
+ 	/*
+ 	 * Initialize the frame format. In particular, ov13b10->current_mode
+-- 
+2.51.0

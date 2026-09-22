@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Install the Amlogic binary userspace from its publisher
+Documentation=file:/usr/local/sbin/chiron-vendor-fetch
+# Online is a hope, not a requirement: without a network the script exits 0
+# and the NetworkManager dispatcher starts this unit again when a connection
+# comes up.
+Wants=network-online.target
+# After the firmware import: on the first boot that unit reboots the board, and
+# a dpkg run cut short by that reboot is worth avoiding even though the next
+# run repairs it.
+After=network-online.target chiron-firmware-import.service
+ConditionPathExists=/usr/local/lib/chiron/vendor-packages.manifest
+
+[Service]
+# Not RemainAfterExit: the dispatcher has to be able to start it again.
+Type=oneshot
+ExecStart=/usr/local/sbin/chiron-vendor-fetch
+TimeoutStartSec=15min
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,81 @@
+From 83bf7a7ba098eb3572f74bf79ec5cb49fc1b94fe Mon Sep 17 00:00:00 2001
+From: Chiron Integration <chiron@localhost>
+Date: Fri, 28 Aug 2026 13:28:56 +0000
+Subject: [PATCH 2/2] aml_drv: leave post-recovery reconnect to userspace
+
+The vendor recovery path replayed one saved station connection across wlan0,
+p2p0 and ap0, corrupted the VIF mapping and could call cfg80211 with a
+successful connect event and a null BSS. Restore the firmware VIFs and let the
+supplicant reconnect instead.
+
+Hardware-accepted on this board, against the same frozen
+upstream commit fb0f89229a0daffea29f1055d74c07272b6e7697.
+---
+ aml_drv/aml_recy.c | 29 ++++++++++++++++++++---------
+ 1 file changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/aml_drv/aml_recy.c b/aml_drv/aml_recy.c
+index ef6b0b1..aa3ddec 100644
+--- a/aml_drv/aml_recy.c
++++ b/aml_drv/aml_recy.c
+@@ -501,8 +501,10 @@ static int aml_recy_vif_restart(struct aml_hw *aml_hw)
+ {
+     struct aml_vif *aml_vif;
+     struct net_device *dev;
++    struct net_device *reconnect_dev = NULL;
+     struct mm_add_if_cfm cfm;
+-    uint8_t i, status;
++    uint8_t i;
++    uint8_t old_vif_index;
+     int err = 0;
+ 
+     for (i = 0; i < NX_VIRT_DEV_MAX; i++) {
+@@ -516,6 +518,7 @@ static int aml_recy_vif_restart(struct aml_hw *aml_hw)
+             RECY_DBG("retrieve vif or dev failed, dev is null");
+             return -1;
+         }
++        old_vif_index = aml_vif->vif_index;
+ 
+         err = aml_send_add_if(aml_hw, dev->dev_addr, AML_VIF_TYPE(aml_vif), false, &cfm);
+         if (err || (cfm.status != 0)) {
+@@ -533,14 +536,13 @@ static int aml_recy_vif_restart(struct aml_hw *aml_hw)
+ 
+         /* should keep STA operations before AP mode */
+         if ((AML_VIF_TYPE(aml_vif) == NL80211_IFTYPE_STATION) &&
+-                (aml_recy->flags & AML_RECY_ASSOC_INFO_SAVED)) {
+-            err = aml_recy_sta_connect(aml_hw, &status);
+-            if (err || status) {
+-                RECY_DBG("sta connect failed");
+-                return -1;
+-            }
+-            aml_recy->reconnect_rest = AML_RECY_RECONNECT_TIMES;
+-            aml_recy_flags_set(AML_RECY_CHECK_SCC);
++                (aml_recy->flags & AML_RECY_ASSOC_INFO_SAVED) &&
++                (old_vif_index == aml_recy->assoc_info.vif_idx)) {
++            /* The firmware reset invalidates the cfg80211 BSS entry.  An
++             * in-driver reconnect reports success with bss == NULL and also
++             * races the userspace supplicant.  Restore all firmware VIFs,
++             * then report the lost association and let supplicant rescan. */
++            reconnect_dev = dev;
+         }
+ 
+         if (AML_VIF_TYPE(aml_vif) == NL80211_IFTYPE_P2P_CLIENT) {
+@@ -571,6 +573,15 @@ static int aml_recy_vif_restart(struct aml_hw *aml_hw)
+         }
+     }
+ 
++    if (reconnect_dev) {
++        RECY_DBG("firmware reset complete; notify userspace to reconnect");
++        netif_carrier_off(reconnect_dev);
++        cfg80211_disconnected(reconnect_dev, WLAN_REASON_UNSPECIFIED,
++                NULL, 0, true, GFP_KERNEL);
++        aml_recy->reconnect_rest = 0;
++        aml_recy_flags_clr(AML_RECY_ASSOC_INFO_SAVED | AML_RECY_CHECK_SCC);
++    }
++
+     return 0;
+ }
+ 
+-- 
+2.43.0
+

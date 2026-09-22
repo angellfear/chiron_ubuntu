@@ -1,0 +1,20 @@
+#!/bin/bash
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+set -euo pipefail
+
+hardware=/dev/video30
+public=/dev/video35
+
+for _ in $(seq 1 100); do
+    [[ -e "$hardware" && -e "$public" ]] && break
+    sleep 0.1
+done
+[[ -e "$hardware" && -e "$public" ]]
+
+# The media nodes are created by the kernel modules. The native bridge keeps
+# the public loopback producer discoverable, then starts the ISP and opens the
+# private node only while a browser is actively capturing. It owns every
+# STREAMON/STREAMOFF transition so the ISP and adapter queues cannot outlive
+# the final client.
+exec /usr/lib/chiron-camera/chiron-camera-bridge-bin

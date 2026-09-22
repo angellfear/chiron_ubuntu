@@ -1,0 +1,31 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Set a safe speaker level once for a new desktop state. WirePlumber persists
+# every later user choice, so this must never run on every login.
+set -eu
+
+state_dir=${XDG_STATE_HOME:-"$HOME/.local/state"}/chiron
+stamp=$state_dir/initial-output-volume-v1
+
+[ -e "$stamp" ] && exit 0
+
+i=0
+while [ "$i" -lt 300 ]; do
+    if wpctl set-volume --limit 1.0 @DEFAULT_AUDIO_SINK@ 0.20 2>/dev/null; then
+        volume=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)
+        case "$volume" in
+            *"Volume: 0.20"*)
+                install -d -m 700 "$state_dir"
+                : > "$stamp"
+                echo "[chiron-audio] initial speaker volume set to 20%"
+                exit 0
+                ;;
+        esac
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+
+echo "[chiron-audio] no default sink after 30 seconds" >&2
+exit 1

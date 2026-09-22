@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Grant Chiron session access to panel backlight
+After=systemd-udev-settle.service
+Before=graphical.target
+ConditionPathExists=/sys/class/backlight/aml-bl/brightness
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'chown root:video /sys/class/backlight/aml-bl/brightness && chmod 0664 /sys/class/backlight/aml-bl/brightness'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

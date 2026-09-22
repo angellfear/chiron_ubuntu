@@ -1,0 +1,127 @@
+From 0066a76dbbd7f1477b0a54918afe945a730f6870 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Sun, 30 Aug 2026 16:47:38 +0000
+Subject: [PATCH] Bluetooth: SCO: take the listening socket lock before the
+ sco_conn lock
+
+An incoming eSCO link -- what a phone raises the moment it switches the
+device from A2DP media to the HFP headset profile -- kills the whole
+Bluetooth stack on this board:
+
+  BUG: sleeping function called from invalid context at net/core/sock.c:3277
+  in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 306, name: kworker/u17:0
+  Workqueue: hci0 hci_rx_work
+  Call trace:
+   ___might_sleep
+   __might_sleep
+   lock_sock_nested
+   sco_conn_ready
+   sco_connect_cfm
+   hci_conn_request_evt
+   hci_event_packet
+   hci_rx_work
+
+hci_rx_work never returns from that call, so no HCI event is processed
+again: every command issued afterwards ends in "hci0: command 0x.... tx
+timeout", the RX byte counters keep growing because hci_recv_frame()
+increments them before queueing, and the controller is indistinguishable
+from dead until the machine is rebooted.
+
+sco_conn_lock() is a plain spinlock, and the incoming-connection branch
+of sco_conn_ready() calls the sleeping lock_sock() from inside it. It is
+also the wrong order: sco_conn_del() drops the conn lock before taking
+the socket lock, and sco_chan_del() then takes the conn lock inside it,
+so the rest of the file establishes lock_sock() > sco_conn_lock().
+
+Read conn->hcon under the conn lock only to find the listening socket,
+then take the two locks in the established order and re-check conn->hcon,
+which __sco_sock_close() can clear while the socket lock is being taken.
+
+No functional change is intended beyond the locking order.
+
+Change-Id: I19fb898b070a9d8b54e76519913ab7efa70186bc
+---
+ net/bluetooth/sco.c | 47 ++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 40 insertions(+), 7 deletions(-)
+
+diff --git a/net/bluetooth/sco.c b/net/bluetooth/sco.c
+index 9a8814d4565a..a426e271752d 100644
+--- a/net/bluetooth/sco.c
++++ b/net/bluetooth/sco.c
+@@ -1108,6 +1108,29 @@ static void sco_conn_ready(struct sco_conn *conn)
+ 		sk->sk_state_change(sk);
+ 		release_sock(sk);
+ 	} else {
++		bdaddr_t src;
++
++		/* The listening socket lock must be taken before the
++		 * sco_conn one: sco_chan_del() -- reached from
++		 * sco_conn_del() on the connect/disconnect_cfm path --
++		 * already takes them in that order, and taking them the
++		 * other way round here both inverts it and calls the
++		 * sleeping lock_sock() from inside a spinlock, which this
++		 * board reaches on every incoming eSCO link:
++		 *
++		 *   BUG: sleeping function called from invalid context
++		 *   Workqueue: hci0 hci_rx_work
++		 *     lock_sock_nested / sco_conn_ready / sco_connect_cfm
++		 *     hci_conn_request_evt / hci_event_packet / hci_rx_work
++		 *
++		 * hci_rx_work never returns from that, so every later HCI
++		 * command times out and the controller looks dead.
++		 *
++		 * conn->hcon is therefore read under the conn lock only to
++		 * find the listener, and re-checked once both locks are held
++		 * in the right order, because __sco_sock_close() can clear it
++		 * while the socket lock is being taken.
++		 */
+ 		sco_conn_lock(conn);
+ 
+ 		if (!conn->hcon) {
+@@ -1115,19 +1138,29 @@ static void sco_conn_ready(struct sco_conn *conn)
+ 			return;
+ 		}
+ 
+-		parent = sco_get_sock_listen(&conn->hcon->src);
+-		if (!parent) {
+-			sco_conn_unlock(conn);
++		bacpy(&src, &conn->hcon->src);
++
++		sco_conn_unlock(conn);
++
++		parent = sco_get_sock_listen(&src);
++		if (!parent)
+ 			return;
+-		}
+ 
+ 		lock_sock(parent);
+ 
++		sco_conn_lock(conn);
++
++		if (!conn->hcon) {
++			sco_conn_unlock(conn);
++			release_sock(parent);
++			return;
++		}
++
+ 		sk = sco_sock_alloc(sock_net(parent), NULL,
+ 				    BTPROTO_SCO, GFP_ATOMIC, 0);
+ 		if (!sk) {
+-			release_sock(parent);
+ 			sco_conn_unlock(conn);
++			release_sock(parent);
+ 			return;
+ 		}
+ 
+@@ -1147,9 +1180,9 @@ static void sco_conn_ready(struct sco_conn *conn)
+ 		/* Wake up parent */
+ 		parent->sk_data_ready(parent);
+ 
+-		release_sock(parent);
+-
+ 		sco_conn_unlock(conn);
++
++		release_sock(parent);
+ 	}
+ }
+ 

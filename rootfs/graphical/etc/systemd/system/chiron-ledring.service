@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Hand the Chiron LED ring to standard Linux LED-class userspace
+Documentation=file:/usr/local/bin/chiron-ledring-ready
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/chiron-ledring-ready
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console

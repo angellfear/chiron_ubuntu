@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 23/44] media: vdec: size single-plane capture buffers as 4:2:0
+
+Validated on this board.
+---
+ .../amvdec_ports/aml_vcodec_dec.c             | 80 +++++++++++++------
+ 1 file changed, 55 insertions(+), 25 deletions(-)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index e165c1b22..9215f82b9 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -2970,8 +2970,12 @@ static int vidioc_try_fmt(struct aml_vcodec_ctx *ctx, struct v4l2_format *f,
+ 			pix_mp->num_planes = fmt->num_planes;
+ 
+ 			pix_mp->plane_fmt[0].bytesperline = pix_mp->width;
+-			pix_mp->plane_fmt[0].sizeimage =
+-				pix_mp->width * pix_mp->height;
++			if (fmt->num_planes == 1)
++				pix_mp->plane_fmt[0].sizeimage =
++					pix_mp->width * pix_mp->height * 3 / 2;
++			else
++				pix_mp->plane_fmt[0].sizeimage =
++					pix_mp->width * pix_mp->height;
+ 
+ 			pix_mp->plane_fmt[1].bytesperline = pix_mp->width;
+ 			pix_mp->plane_fmt[1].sizeimage =
+@@ -3245,20 +3249,23 @@ static void update_ctx_dimension(struct aml_vcodec_ctx *ctx, u32 type)
+ 	if ((!is_vdec_core_fmt(ctx) || (dw_mode != DM_YUV_ONLY)) && is_hevc_align32(0))
+ 		w_align = 32;
+ 
++	q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
++	q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 	if (V4L2_TYPE_IS_MULTIPLANAR(type)) {
+-		q_data->sizeimage[0] = ctx->picinfo.y_len_sz;
+-		q_data->sizeimage[1] = ctx->picinfo.c_len_sz;
+-
+-		q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 		q_data->bytesperline[0] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->bytesperline[1] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-
+ 		q_data->bytesperline[0] = q_data->bytesperline[0] << is_output_p010(dw_mode);
+-		q_data->bytesperline[1] = q_data->bytesperline[1] << is_output_p010(dw_mode);
++		if (q_data->fmt->num_planes == 1) {
++			q_data->sizeimage[0] = ctx->picinfo.y_len_sz +
++				ctx->picinfo.c_len_sz;
++			q_data->sizeimage[1] = 0;
++			q_data->bytesperline[1] = 0;
++		} else {
++			q_data->sizeimage[0] = ctx->picinfo.y_len_sz;
++			q_data->sizeimage[1] = ctx->picinfo.c_len_sz;
++			q_data->bytesperline[1] = ALIGN(ctx->picinfo.coded_width / ratio,
++				w_align) << is_output_p010(dw_mode);
++		}
+ 	} else {
+-		q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 		q_data->sizeimage[0] = ctx->picinfo.y_len_sz;
+ 		q_data->sizeimage[0] += ctx->picinfo.c_len_sz;
+ 		q_data->bytesperline[0] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+@@ -3275,20 +3282,23 @@ static void update_ctx_dimension(struct aml_vcodec_ctx *ctx, u32 type)
+ 	if (ctx->internal_dw_scale)
+ 		ratio = vdec_get_size_ratio(tw_mode);
+ 
++	q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
++	q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 	if (V4L2_TYPE_IS_MULTIPLANAR(type)) {
+-		q_data->sizeimage_tw[0] = ctx->picinfo.y_len_sz_tw;
+-		q_data->sizeimage_tw[1] = ctx->picinfo.c_len_sz_tw;
+-
+-		q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 		q_data->bytesperline_tw[0] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->bytesperline_tw[1] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-
+ 		q_data->bytesperline_tw[0] = q_data->bytesperline_tw[0] << is_output_p010(tw_mode);
+-		q_data->bytesperline_tw[1] = q_data->bytesperline_tw[1] << is_output_p010(tw_mode);
++		if (q_data->fmt->num_planes == 1) {
++			q_data->sizeimage_tw[0] = ctx->picinfo.y_len_sz_tw +
++				ctx->picinfo.c_len_sz_tw;
++			q_data->sizeimage_tw[1] = 0;
++			q_data->bytesperline_tw[1] = 0;
++		} else {
++			q_data->sizeimage_tw[0] = ctx->picinfo.y_len_sz_tw;
++			q_data->sizeimage_tw[1] = ctx->picinfo.c_len_sz_tw;
++			q_data->bytesperline_tw[1] = ALIGN(ctx->picinfo.coded_width / ratio,
++				w_align) << is_output_p010(tw_mode);
++		}
+ 	} else {
+-		q_data->coded_width = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+-		q_data->coded_height = ALIGN(ctx->picinfo.coded_height / ratio, 64);
+ 		q_data->sizeimage_tw[0] = ctx->picinfo.y_len_sz_tw;
+ 		q_data->sizeimage_tw[0] += ctx->picinfo.c_len_sz_tw;
+ 		q_data->bytesperline_tw[0] = ALIGN(ctx->picinfo.coded_width / ratio, w_align);
+@@ -3403,6 +3413,26 @@ static int vidioc_vdec_s_fmt(struct file *file, void *priv,
+ 		return -EBUSY;
+ 	}
+ 
++	/*
++	 * The hardware double-write path produces NV12/NV21. I420 is only valid
++	 * when the optional conversion path is explicitly enabled; accepting the
++	 * generic client's YU12 request otherwise labels interleaved chroma as
++	 * planar data. Return the native equivalent from S_FMT so userspace maps
++	 * and converts the capture buffer correctly.
++	 */
++	if (!V4L2_TYPE_IS_OUTPUT(f->type) && !support_format_I420) {
++		if (V4L2_TYPE_IS_MULTIPLANAR(f->type)) {
++			if (pix_mp->pixelformat == V4L2_PIX_FMT_YUV420)
++				pix_mp->pixelformat = V4L2_PIX_FMT_NV21;
++			else if (pix_mp->pixelformat == V4L2_PIX_FMT_YUV420M)
++				pix_mp->pixelformat = V4L2_PIX_FMT_NV21M;
++		} else if (pix->pixelformat == V4L2_PIX_FMT_YUV420) {
++			pix->pixelformat = V4L2_PIX_FMT_NV21;
++		} else if (pix->pixelformat == V4L2_PIX_FMT_YUV420M) {
++			pix->pixelformat = V4L2_PIX_FMT_NV21M;
++		}
++	}
++
+ 	fmt = aml_vdec_find_format(f);
+ 	if (fmt == NULL) {
+ 		if (V4L2_TYPE_IS_OUTPUT(f->type))
+@@ -3763,10 +3793,10 @@ static int vb2ops_vdec_queue_setup(struct vb2_queue *vq,
+ 		int dw_mode = DM_YUV_ONLY;
+ 		int tw_mode = DM_INVALID;
+ 
+-		if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+-			*nplanes = 2;
+-		else
++		if (V4L2_TYPE_IS_OUTPUT(vq->type))
+ 			*nplanes = 1;
++		else
++			*nplanes = q_data->fmt->num_planes;
+ 
+ 		if (vdec_if_get_param(ctx, GET_PARAM_DW_MODE, &dw_mode))
+ 			return -EINVAL;

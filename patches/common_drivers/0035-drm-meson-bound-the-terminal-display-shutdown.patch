@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:48:37 +0000
+Subject: [PATCH 35/44] drm/meson: bound the terminal display shutdown
+
+This replaces the earlier reboot-only bypass with the shutdown path that
+is actually accepted on this board. Device shutdown runs after userspace is
+frozen and immediately before the firmware reset or poweroff: the vendor
+atomic teardown is unsafe there, because the LCD and VRR callbacks may
+already have removed vblank while an old commit worker still holds
+commit_mutex, and waiting for either wedges the machine before the PSCI
+call. Close the atomic entry point, stop new CRTC interrupts without
+waiting for an in-flight handler, and do not flush commit workers or run a
+final modeset.
+
+lcd_shutdown likewise leaves the panel to firmware on halt and power-off,
+not only on restart.
+
+Validated on this board.
+---
+ drivers/drm/meson_drv.c           | 70 ++++++++++---------------------
+ drivers/media/vout/lcd/lcd_vout.c |  6 ++-
+ 2 files changed, 25 insertions(+), 51 deletions(-)
+
+diff --git a/drivers/drm/meson_drv.c b/drivers/drm/meson_drv.c
+index 4713bb632..da1bb1dc5 100644
+--- a/drivers/drm/meson_drv.c
++++ b/drivers/drm/meson_drv.c
+@@ -11,6 +11,7 @@
+ #include <linux/of_graph.h>
+ #include <linux/component.h>
+ #include <linux/init.h>
++#include <linux/reboot.h>
+ #include <linux/amlogic/gki_module.h>
+ 
+ #include <uapi/linux/sched/types.h>
+@@ -729,14 +730,9 @@ static const struct dev_pm_ops am_meson_drm_pm_ops = {
+ 
+ static void am_meson_drv_shutdown(struct platform_device *pdev)
+ {
+-	struct drm_modeset_acquire_ctx ctx;
+ 	struct drm_device *dev;
+ 	struct drm_crtc *crtc;
+-	struct am_meson_crtc *amcrtc;
+-	struct meson_drm_thread *drm_thread;
+ 	struct meson_drm *priv;
+-	int ret;
+-	int i;
+ 
+ 	DRM_INFO("%s: in\n", __func__);
+ 	priv = dev_get_drvdata(&pdev->dev);
+@@ -746,55 +742,31 @@ static void am_meson_drv_shutdown(struct platform_device *pdev)
+ 	}
+ 
+ 	dev = priv->drm;
++	if (!dev) {
++		DRM_ERROR("%s: drm is NULL!\n", __func__);
++		return;
++	}
+ 
+ 	/*
+-	 * The vendor atomic teardown waits for a vblank/commit worker after the
+-	 * LCD and VRR shutdown callbacks have already disabled that path.  A
+-	 * reboot does not need a clean modeset; leaving this wait active wedges
+-	 * kernel_restart() indefinitely.
++	 * Device shutdown runs after userspace has been frozen and immediately
++	 * before firmware reset/poweroff.  The vendor atomic teardown is unsafe
++	 * here: LCD/VRR callbacks may already have removed vblank, while an old
++	 * commit worker can still own commit_mutex.  Waiting for either one can
++	 * wedge the machine before the PSCI call.
++	 *
++	 * Close the atomic entry point first, then stop new CRTC interrupts
++	 * without waiting for an in-flight handler.  Do not flush commit workers
++	 * or perform a final modeset: reset/poweroff invalidates the hardware and
++	 * the remaining kernel execution window is deliberately bounded.
+ 	 */
+-	DRM_ERROR("%s: bypassing atomic display teardown on reboot\n", __func__);
++	WRITE_ONCE(priv->shutdown_on, true);
++	smp_mb();
+ 	drm_for_each_crtc(crtc, dev)
+-		disable_irq(to_am_meson_crtc(crtc)->irq);
+-	priv->shutdown_on = true;
+-	dev->num_crtcs = 0;
+-	return;
+-
+-	DRM_INFO("%s: atomic shutdown begin\n", __func__);
+-	/* prevent drm_wait_vblank_ioctl on waiting event*/
+-	drm_atomic_helper_shutdown(dev);
+-	DRM_INFO("%s: atomic shutdown done\n", __func__);
+-
+-	DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
+-
+-	/* suspend atomic ioctl thread */
+-	drm_for_each_crtc(crtc, dev) {
+-		amcrtc = to_am_meson_crtc(crtc);
+-		disable_irq(amcrtc->irq);
+-	}
+-
+-	priv->shutdown_on = true;
++		disable_irq_nosync(to_am_meson_crtc(crtc)->irq);
++	WRITE_ONCE(dev->num_crtcs, 0);
+ 
+-	/* prevent drm_wait_vblank_ioctl in its entry to avoid late lock */
+-	dev->num_crtcs = 0;
+-
+-	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
+-
+-	DRM_INFO("%s: commit workers stopping\n", __func__);
+-	/* flush kworker of commit thread and stop the thread */
+-	DRM_INFO("%s: try to flush worker\n", __func__);
+-	for (i = 0; i < priv->num_crtcs; i++) {
+-		drm_thread = &priv->commit_thread[i];
+-		if (drm_thread->thread) {
+-			DRM_INFO("%s: flush worker %d begin\n", __func__, i);
+-			kthread_flush_worker(&drm_thread->worker);
+-			DRM_INFO("%s: flush worker %d done\n", __func__, i);
+-			kthread_stop(drm_thread->thread);
+-			drm_thread->thread = NULL;
+-		}
+-	}
+-
+-	DRM_INFO("%s: done\n", __func__);
++	DRM_INFO("%s: terminal display shutdown quiesced (state=%d)\n",
++		 __func__, system_state);
+ }
+ 
+ static struct platform_driver am_meson_drm_platform_driver = {
+diff --git a/drivers/media/vout/lcd/lcd_vout.c b/drivers/media/vout/lcd/lcd_vout.c
+index 0a4ebee38..fb53850ff 100644
+--- a/drivers/media/vout/lcd/lcd_vout.c
++++ b/drivers/media/vout/lcd/lcd_vout.c
+@@ -2358,8 +2358,10 @@ static void lcd_shutdown(struct platform_device *pdev)
+ 	if (!pdrv)
+ 		return;
+ 
+-	/* Skip vendor LCD teardown during system restart. */
+-	if (system_state == SYSTEM_RESTART)
++	/* Firmware owns the final panel state on halt, poweroff and restart. */
++	if (system_state == SYSTEM_HALT ||
++	    system_state == SYSTEM_POWER_OFF ||
++	    system_state == SYSTEM_RESTART)
+ 		return;
+ 
+ 	if (lcd_debug_print_flag & LCD_DBG_PR_NORMAL)

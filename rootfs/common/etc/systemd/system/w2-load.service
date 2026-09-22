@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Load Amlogic W2 wifi driver
+DefaultDependencies=no
+After=local-fs.target
+Before=network.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+ExecStartPre=/bin/sleep 3
+ExecStart=/bin/bash /usr/local/lib/chiron/load-w2.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+# A system service rather than a user unit: screen orientation is a property of
+# the hardware, not of whoever is logged in, and this image keeps all display
+# and input setup out of user sessions. It reaches the compositor through the
+# session's Wayland socket, which root may open; the script waits for that
+# socket and re-waits whenever a session is replaced.
+Description=Rotate the panel to follow the hinge (accelerometer)
+Documentation=file:/usr/local/bin/chiron-autorotate
+After=greetd.service
+Wants=greetd.service
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-1
+ExecStart=/usr/local/bin/chiron-autorotate
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

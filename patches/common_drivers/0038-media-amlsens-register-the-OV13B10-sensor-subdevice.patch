@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 38/44] media: amlsens: register the OV13B10 sensor subdevice
+
+This board carries an OV13B10; add it to the sensor subdevice table so it
+is probed.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlsens/sensor_drv.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/amlisp/amlsens/sensor_drv.c b/drivers/amlisp/amlsens/sensor_drv.c
+index a7f99ad54..5b6a59a6e 100644
+--- a/drivers/amlisp/amlsens/sensor_drv.c
++++ b/drivers/amlisp/amlsens/sensor_drv.c
+@@ -166,6 +166,7 @@ struct sensor_subdev sd_imx585 = {
+ };
+ 
+ struct sensor_subdev *aml_sensors[] = {
++	&sd_ov13b10,
+ 	&sd_ov08a10,
+ 	&sd_imx678,
+ 	&sd_imx585,

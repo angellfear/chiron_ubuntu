@@ -1,0 +1,40 @@
+#!/bin/bash
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# End the kernel boot effect and expose the standard Linux LED class controls
+# to the desktop account through its normal Ubuntu "video" group.
+set -euo pipefail
+shopt -s nullglob
+
+leds=()
+for _ in $(seq 1 50); do
+    leds=(/sys/class/leds/chiron:red:ring* \
+          /sys/class/leds/chiron:green:ring* \
+          /sys/class/leds/chiron:blue:ring*)
+    test "${#leds[@]}" -eq 144 && break
+    sleep 0.1
+done
+test "${#leds[@]}" -eq 144 || {
+    echo "[chiron-ledring] expected 144 colour channels, found ${#leds[@]}" >&2
+    exit 1
+}
+
+# The first ordinary LED-class write atomically tells every controller to stop
+# scheduling boot frames.  Clear all channels before granting userspace access.
+for led in "${leds[@]}"; do
+    if test -e "$led/trigger"; then
+        printf 'none\n' > "$led/trigger"
+    fi
+    printf '0\n' > "$led/brightness"
+done
+
+for led in "${leds[@]}"; do
+    chgrp video "$led/brightness"
+    chmod 0664 "$led/brightness"
+    if test -e "$led/trigger"; then
+        chgrp video "$led/trigger"
+        chmod 0664 "$led/trigger"
+    fi
+done
+
+echo "[chiron-ledring] boot animation stopped; Linux LED class is ready"

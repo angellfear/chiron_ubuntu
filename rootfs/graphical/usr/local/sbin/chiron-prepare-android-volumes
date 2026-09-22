@@ -1,0 +1,72 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Prepare read-only Android filesystems behind permission-masking bindfs views.
+# The public /media mountpoints remain unmounted until the desktop user clicks
+# their normal GVfs volumes (the matching fstab entries use x-gvfs-show).
+set -eu
+
+super=/dev/mmcblk0p22
+runtime=/run/chiron-android-volumes
+sources=$runtime/source
+views=$runtime/view
+parser=/usr/local/lib/chiron-android/chiron_super.py
+desktop_uid=1000
+desktop_gid=1000
+
+log() { printf '[android-volumes] %s\n' "$*"; }
+fail() { log "ERROR: $*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || fail "root privileges are required"
+[ -b "$super" ] || fail "$super is not a block device"
+[ -x "$parser" ] || fail "$parser is missing"
+for command in bindfs blkid blockdev findmnt mount; do
+    command -v "$command" >/dev/null 2>&1 || fail "$command is missing"
+done
+getent passwd "$desktop_uid" >/dev/null 2>&1 \
+    || fail "desktop uid $desktop_uid does not exist"
+getent group "$desktop_gid" >/dev/null 2>&1 \
+    || fail "desktop gid $desktop_gid does not exist"
+
+install -d -m 755 "$sources" "$views"
+
+# A read-only parent and --readonly dm targets are independent safety layers.
+# A Linux reboot recreates the block devices, so this does not affect Android.
+blockdev --setro "$super"
+"$parser" --create "$super" >"$runtime/super-mappings.json"
+
+mount_view() {
+    name=$1
+    source=$sources/$name
+    view=$views/$name
+    mapper_name=$(printf '%s' "$name" | tr '_' '-')
+    mapper=/dev/mapper/android-$mapper_name-ro
+
+    [ -b "$mapper" ] || return 0
+    [ "$(blockdev --getro "$mapper")" -eq 1 ] \
+        || fail "$mapper is not read-only"
+    [ "$(blkid -p -s TYPE -o value "$mapper")" = ext4 ] \
+        || fail "$mapper is not ext4"
+    [ -d "$source" ] || install -d -m 700 "$source"
+    if ! findmnt -rn --mountpoint "$source" >/dev/null 2>&1; then
+        mount -t ext4 -o ro,noload,nosuid,nodev,noexec "$mapper" "$source"
+    fi
+    mounted_source=$(findmnt -rn -o SOURCE --mountpoint "$source")
+    [ "$(readlink -f "$mounted_source")" = "$(readlink -f "$mapper")" ] \
+        || fail "$source is occupied by another filesystem"
+    findmnt -rn -o OPTIONS --mountpoint "$source" | tr ',' '\n' | grep -qx ro \
+        || fail "$source is not read-only"
+
+    install -d -m 755 "$view"
+    if ! findmnt -rn --mountpoint "$view" >/dev/null 2>&1; then
+        bindfs -r --force-user="$desktop_uid" --force-group="$desktop_gid" \
+            --perms=a+rX -o allow_other "$source" "$view"
+    fi
+    log "$name is ready behind $view"
+}
+
+for partition in system system_ext vendor product odm; do
+    mount_view "$partition"
+done
+
+exit 0

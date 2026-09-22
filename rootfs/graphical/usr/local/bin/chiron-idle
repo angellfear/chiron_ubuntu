@@ -1,0 +1,146 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# User-configurable display blanking and optional system suspend for Wayfire.
+set -eu
+
+state_dir=${XDG_CONFIG_HOME:-$HOME/.config}/chiron
+config=$state_dir/power.conf
+pid_file=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/chiron-idle.pid
+screen_off_file=$XDG_RUNTIME_DIR/chiron-screen-off
+saved_brightness_file=$XDG_RUNTIME_DIR/chiron-saved-brightness
+backlight=/sys/class/backlight/aml-bl/brightness
+child=
+reload=0
+stopping=0
+
+reload_timer() {
+    [ -r "$pid_file" ] || return 0
+    owner=$(cat "$pid_file" 2>/dev/null || true)
+    case "$owner" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    [ "$owner" = "$$" ] && return 0
+    idle_child=$(pgrep -P "$owner" -x swayidle 2>/dev/null || true)
+    # The owner loop treats every child exit as a request to reread power.conf.
+    # Killing only the child avoids shell-dependent HUP/wait ordering.
+    [ -z "$idle_child" ] || kill -TERM $idle_child 2>/dev/null || true
+}
+
+screen_off() {
+    [ ! -e "$screen_off_file" ] || return 0
+    [ -r "$backlight" ] && cat "$backlight" >"$saved_brightness_file"
+    : >"$screen_off_file"
+    chiron-privacy --screen-off 1 || true
+    printf '0\n' >"$backlight"
+}
+
+wake_screen() {
+    was_off=0
+    [ ! -e "$screen_off_file" ] || was_off=1
+    rm -f "$screen_off_file"
+    if [ "$was_off" -eq 1 ] && [ -r "$saved_brightness_file" ]; then
+        cat "$saved_brightness_file" >"$backlight"
+    fi
+    # With ALS enabled the controller immediately replaces the saved value by
+    # its latest target. Without ALS, the value restored above remains active.
+    chiron-privacy --screen-off 0 || true
+    rm -f "$saved_brightness_file"
+
+    # An EV_SW wake does not pass through swayidle's resume hook. Restart the
+    # owner so its inactivity period starts again from this input event.
+    reload_timer
+}
+
+case "${1:-run}" in
+    screen-off) screen_off; exit ;;
+    wake) wake_screen; exit ;;
+    reload) reload_timer; exit ;;
+    run) ;;
+    *) echo "usage: $0 [run|screen-off|wake|reload]" >&2; exit 2 ;;
+esac
+
+TIMEOUT_MINUTES=1
+TIMEOUT_ACTION=clock
+SUSPEND_MINUTES=0
+mkdir -p "$state_dir"
+if [ -r "$config" ]; then
+    # The file is user-owned and contains only assignments written by
+    # chiron-privacy's native display controller.
+    . "$config"
+fi
+
+restart_child() {
+    reload=1
+    [ -z "${child:-}" ] || kill "$child" 2>/dev/null || true
+}
+
+stop_child() {
+    stopping=1
+    [ -z "${child:-}" ] || kill "$child" 2>/dev/null || true
+}
+
+cleanup() {
+    rm -f "$pid_file"
+}
+
+trap restart_child HUP
+trap stop_child INT TERM
+trap cleanup EXIT
+printf '%s\n' "$$" >"$pid_file"
+
+while [ "$stopping" -eq 0 ]; do
+    TIMEOUT_MINUTES=1
+    TIMEOUT_ACTION=clock
+    SUSPEND_MINUTES=0
+    [ ! -r "$config" ] || . "$config"
+
+    set -- /usr/bin/swayidle -w
+    case "$TIMEOUT_MINUTES" in
+        ''|*[!0-9]*) TIMEOUT_MINUTES=1 ;;
+    esac
+    case "$TIMEOUT_ACTION" in
+        off|clock|none) ;;
+        *) TIMEOUT_ACTION=clock ;;
+    esac
+    case "$SUSPEND_MINUTES" in
+        ''|*[!0-9]*) SUSPEND_MINUTES=0 ;;
+    esac
+    seconds=$((TIMEOUT_MINUTES * 60))
+    case "$TIMEOUT_ACTION" in
+        off)
+            # Keep the Wayland output enabled so touch and volume keys remain
+            # ordinary swayidle resume sources. Only the physical backlight is
+            # blanked. ALS keeps calculating its target behind the screen-off
+            # guard and applies the latest target on wake.
+            set -- "$@" timeout "$seconds" \
+                '/usr/local/bin/chiron-idle screen-off' \
+                resume '/usr/local/bin/chiron-idle wake'
+            ;;
+        clock)
+            set -- "$@" timeout "$seconds" \
+                'chiron-privacy --clock show || true' \
+                resume 'chiron-privacy --clock hide || true'
+            ;;
+        none) ;;
+    esac
+    if [ "$SUSPEND_MINUTES" -gt 0 ]; then
+        seconds=$((SUSPEND_MINUTES * 60))
+        set -- "$@" timeout "$seconds" 'systemctl suspend' \
+            before-sleep 'wlopm --off "*"' \
+            after-resume 'wlopm --on "*"'
+    fi
+
+    reload=0
+    if [ "$TIMEOUT_ACTION" = none ] && [ "$SUSPEND_MINUTES" -eq 0 ]; then
+        sleep 2147483647 &
+    else
+        "$@" &
+    fi
+    child=$!
+    wait "$child" 2>/dev/null || true
+    child=
+    [ "$stopping" -eq 0 ] || break
+    # Avoid a tight loop if swayidle itself fails before it can wait.
+    [ "$reload" -eq 1 ] || sleep 1
+done

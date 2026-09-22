@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:50:02 +0000
+Subject: [PATCH 41/44] media: amlcam: acknowledge the final ISP frame IRQ
+ after STREAMOFF
+
+A frame interrupt can still arrive after STREAMOFF has marked the ISP as
+stopped. Acknowledge it the way the adapter IRQ handler already does,
+otherwise the next stream start comes up on a stale interrupt state.
+
+Validated on
+this board.
+---
+ drivers/amlisp/amlcam/cam_isp/aml_isp.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/amlisp/amlcam/cam_isp/aml_isp.c b/drivers/amlisp/amlcam/cam_isp/aml_isp.c
+index 7f0e24012..6762329a1 100644
+--- a/drivers/amlisp/amlcam/cam_isp/aml_isp.c
++++ b/drivers/amlisp/amlcam/cam_isp/aml_isp.c
+@@ -733,6 +733,12 @@ static irqreturn_t isp_subdev_irq_handler(int irq, void *dev)
+ 
+ 	debug_isp_irq_in_count++;
+ 
++	/*
++	 * Acknowledge a final frame IRQ even after STREAMOFF marked the ISP as
++	 * stopped, matching the ordering used by the adapter IRQ handler.
++	 */
++	status = isp_dev->ops->hw_interrupt_status(isp_dev);
++
+ 	if (isp_dev->isp_status == STATUS_STOP) {
+ 		if (aml_adap_global_get_vdev() == isp_dev->index) {
+ 			pr_err("ISP%d: Stoped and Irq ignore\n", isp_dev->index);
+@@ -749,7 +755,6 @@ static irqreturn_t isp_subdev_irq_handler(int irq, void *dev)
+ 
+ 	spin_lock_irqsave(&isp_dev->irq_lock, flags);
+ 
+-	status = isp_dev->ops->hw_interrupt_status(isp_dev);
+ 	if (status & 0x1) {
+ 		isp_dev->frm_cnt ++;
+ 		for (id = AML_ISP_STREAM_0; id < AML_ISP_STREAM_MAX; id++) {

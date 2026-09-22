@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 27/44] media: vdec: keep the vendor raw_data out of
+ VIDIOC_G_PARM
+
+Validated on this board.
+---
+ .../media_modules/amvdec_ports/aml_vcodec_dec.c   | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+index d1acde67c..b1f40e030 100644
+--- a/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
++++ b/drivers/media_modules/amvdec_ports/aml_vcodec_dec.c
+@@ -5360,6 +5360,21 @@ static int vidioc_vdec_g_parm(struct file *file, void *fh,
+ 		return 0;
+ 	}
+ 
++	/*
++	 * Private STREAMPARM controls call this helper with file == NULL and
++	 * consume the vendor raw_data layout below. A real VIDIOC_G_PARM uses
++	 * struct v4l2_outputparm instead; never expose raw config bytes as an
++	 * accidental 0/0 timeperframe.
++	 */
++	if (file) {
++		u32 duration = ctx->config.parm.dec.cfg.duration;
++
++		memset(&a->parm.output, 0, sizeof(a->parm.output));
++		a->parm.output.timeperframe.numerator = duration ?: 1;
++		a->parm.output.timeperframe.denominator = duration ? 96000 : 30;
++		return 0;
++	}
++
+ 	if ((a->type == V4L2_BUF_TYPE_VIDEO_OUTPUT) || (a->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)) {
+ 		if (vdec_if_get_param(ctx, GET_PARAM_CONFIG_INFO, &ctx->config.parm.dec))
+ 			v4l_dbg(ctx, V4L_DEBUG_CODEC_ERROR,

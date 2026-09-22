@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+# The ring runs the kernel's boot animation from the moment the driver probes
+# until something writes through the LED class, so the handoff must not happen
+# before the desktop is actually on screen -- otherwise the ring goes dark and
+# stays dark while the session is still starting.
+#
+# This used to be ordered after a unit that insmod'ed the driver from
+# the Android /cache partition. Here the module is installed in
+# /lib/modules/<kver>/extra and depmod'ed, and the four controllers are in the
+# board DT, so it loads on its own; there is nothing to order against and
+# chiron-ledring-ready waits for the channels itself.
+Description=Wait for the Chiron graphical shell before handing off the LED ring
+
+[Path]
+PathExists=/run/chiron/session-ready
+Unit=chiron-ledring.service
+
+[Install]
+WantedBy=multi-user.target

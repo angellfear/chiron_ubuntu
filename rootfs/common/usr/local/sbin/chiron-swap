@@ -1,0 +1,63 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# chiron-swap -- swap in compressed RAM, created on every boot.
+#
+# Found by measurement on this board.
+# The board has 2.9 GB of RAM and ships with no swap, and on this image that is
+# not a tuning detail: the root filesystem is a squashfs read through a loop
+# device, so every page the kernel reclaims from the page cache has to be read
+# back and decompressed again. Under a browser the machine goes into page-cache
+# thrashing -- processes queue inside squashfs_decompress(), and PID 1,
+# NetworkManager, wpa_supplicant and even a plain `ls` end up in uninterruptible
+# sleep together, so the session, SSH and the system services stall at once.
+#
+# Giving anonymous memory somewhere to go stops it being satisfied by evicting
+# the file cache, which is the same thing vm.swappiness in
+# sysctl.d/60-chiron-vm.conf asks for from the other side.
+#
+# It must not be a file. Paging onto the same ext4 that carries the
+# squashfs and the overlay upper directory, and that corrupted clean page-cache
+# pages on eviction -- a 296 MB model file read back with a different sha256
+# every few hours, while the same file read with `dd iflag=direct` was
+# byte-perfect every time. zram has no filesystem and no page cache in its path.
+set -eu
+
+SIZE=1536M
+ALGORITHM=lzo-rle
+PRIORITY=100
+
+[ -r /etc/default/chiron-swap ] && . /etc/default/chiron-swap
+
+log() { printf '[chiron-swap] %s\n' "$*"; }
+
+DEV=/dev/zram0
+SYS=/sys/block/zram0
+
+if [ ! -d "$SYS" ]; then
+    modprobe zram 2>/dev/null || true
+fi
+if [ ! -d "$SYS" ]; then
+    log "no zram device and no zram module -- running without swap"
+    exit 0
+fi
+
+case "$(swapon --show=NAME --noheadings 2>/dev/null)" in
+    *"$DEV"*) log "$DEV already active"; exit 0 ;;
+esac
+
+# Sized once. A zram device that already has a size cannot be resized without
+# being reset, and resetting one that something is paging onto loses those
+# pages.
+if [ "$(cat "$SYS/disksize")" = "0" ]; then
+    # Not every kernel offers every algorithm, and writing an unsupported name
+    # fails the whole script under `set -e`. The kernel default is fine if so.
+    echo "$ALGORITHM" > "$SYS/comp_algorithm" 2>/dev/null || \
+        log "algorithm $ALGORITHM unavailable, using the kernel default"
+    log "sizing $DEV at $SIZE with $(cat "$SYS/comp_algorithm" | sed 's/.*\[\(.*\)\].*/\1/')"
+    echo "$SIZE" > "$SYS/disksize"
+    mkswap "$DEV" >/dev/null
+fi
+
+log "enabling $DEV at priority $PRIORITY"
+swapon --priority "$PRIORITY" "$DEV"

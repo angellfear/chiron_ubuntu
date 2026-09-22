@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 08/44] drm/meson: accept imported PRIME buffers as scanout
+ sources
+
+Validated on this board.
+---
+ drivers/drm/meson_gem.c | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/drivers/drm/meson_gem.c b/drivers/drm/meson_gem.c
+index c21a9b136..22b70f590 100644
+--- a/drivers/drm/meson_gem.c
++++ b/drivers/drm/meson_gem.c
+@@ -471,6 +471,36 @@ static struct sg_table *meson_gem_prime_get_sg_table(struct drm_gem_object *obj)
+ 	meson_gem_obj = to_am_meson_gem_obj(obj);
+ 	DRM_DEBUG("%s %p.\n", __func__, meson_gem_obj);
+ 
++	/*
++	 * KMSRO renders on Panfrost and imports the resulting dma-buf into
++	 * aml_drm for scanout.  The imported sg table belongs to the dma-buf
++	 * attachment, so return a private copy; drm_prime frees this copy after
++	 * mapping and leaves the attachment-owned table intact.
++	 */
++	if (meson_gem_obj->base.import_attach && meson_gem_obj->sg) {
++		src_table = meson_gem_obj->sg;
++		dst_table = kmalloc(sizeof(*dst_table), GFP_KERNEL);
++		if (!dst_table)
++			return ERR_PTR(-ENOMEM);
++
++		ret = sg_alloc_table(dst_table, src_table->nents, GFP_KERNEL);
++		if (ret) {
++			kfree(dst_table);
++			return ERR_PTR(ret);
++		}
++
++		dst_sg = dst_table->sgl;
++		src_sg = src_table->sgl;
++		for (i = 0; i < src_table->nents; i++) {
++			sg_set_page(dst_sg, sg_page(src_sg), src_sg->length, 0);
++			sg_dma_address(dst_sg) = sg_dma_address(src_sg);
++			sg_dma_len(dst_sg) = sg_dma_len(src_sg);
++			dst_sg = sg_next(dst_sg);
++			src_sg = sg_next(src_sg);
++		}
++		return dst_table;
++	}
++
+ #if (defined CONFIG_AMLOGIC_HEAP_CMA) || (defined CONFIG_AMLOGIC_HEAP_CODEC_MM)
+ 	if (!meson_gem_obj->base.import_attach && meson_gem_obj->is_dma) {
+ 		src_table = meson_gem_obj->sg;

@@ -1,0 +1,235 @@
+From ce0387d7d2e27b99d58488162c8fc54e7a5e59ec Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 07:34:01 +0000
+Subject: [PATCH] Chiron production delta: panfrost reset quirk, aml_mpt
+ partitions, Werror relaxation
+
+Hardware-accepted on this board, against the same locked source pair.
+
+Change-Id: Ia5df78baf2967bd363cc6b344afa57b730c88afa
+---
+ Makefile                                |   7 ++
+ block/partitions/Kconfig                |   8 ++
+ block/partitions/Makefile               |   1 +
+ block/partitions/aml_mpt.c              | 119 ++++++++++++++++++++++++
+ block/partitions/check.h                |   1 +
+ block/partitions/core.c                 |   3 +
+ drivers/gpu/drm/panfrost/panfrost_gpu.c |   1 +
+ 7 files changed, 140 insertions(+)
+ create mode 100644 block/partitions/aml_mpt.c
+
+diff --git a/Makefile b/Makefile
+index afe325c16222..9288d05da4dc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -700,6 +700,13 @@ endif
+ ifdef CONFIG_AMLOGIC_DRIVER
+ include $(srctree)/$(COMMON_DRIVERS_DIR)/header_include.mk
+ KBUILD_CFLAGS += -Werror
++# GCC 13 reports unused statics that older compilers did not: the
++# aml_efuse_init/exit pair in common_drivers efuse.h, and init_wol_state
++# in drivers/net/phy/realtek.c. They are warnings about vendor code this
++# tree does not own, and -Werror above turns them into a build failure.
++# Relaxed here, in the same place and for the same reason as the
++# -Wno-error list a few lines below.
++KBUILD_CFLAGS += -Wno-error=unused-function
+ endif
+ 
+ ifeq ($(KBUILD_EXTMOD),)
+diff --git a/block/partitions/Kconfig b/block/partitions/Kconfig
+index 278593b8e4e9..bf7fd8545bc2 100644
+--- a/block/partitions/Kconfig
++++ b/block/partitions/Kconfig
+@@ -2,6 +2,14 @@
+ #
+ # Partition configuration
+ #
++config AML_MPT_PARTITION
++	bool "Amlogic MPT partition support"
++	depends on BLOCK
++	default y if ARCH_MESON
++	help
++	  Read the Amlogic proprietary MPT table stored at eMMC LBA 73728.
++	  The parser creates normal Linux block partitions from the MPT entries.
++
+ config PARTITION_ADVANCED
+ 	bool "Advanced partition selection"
+ 	help
+diff --git a/block/partitions/Makefile b/block/partitions/Makefile
+index a7f05cdb02a8..e972ed249bad 100644
+--- a/block/partitions/Makefile
++++ b/block/partitions/Makefile
+@@ -4,6 +4,7 @@
+ #
+ 
+ obj-$(CONFIG_BLOCK) += core.o
++obj-$(CONFIG_AML_MPT_PARTITION) += aml_mpt.o
+ obj-$(CONFIG_ACORN_PARTITION) += acorn.o
+ obj-$(CONFIG_AMIGA_PARTITION) += amiga.o
+ obj-$(CONFIG_ATARI_PARTITION) += atari.o
+diff --git a/block/partitions/aml_mpt.c b/block/partitions/aml_mpt.c
+new file mode 100644
+index 000000000000..f4e540631705
+--- /dev/null
++++ b/block/partitions/aml_mpt.c
+@@ -0,0 +1,119 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Amlogic eMMC MPT partition parser. */
++
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <asm/unaligned.h>
++
++#include "check.h"
++
++#define AML_MPT_LBA		73728
++#define AML_MPT_SECTORS		32
++#define AML_MPT_BYTES		(AML_MPT_SECTORS * 512)
++#define AML_MPT_ENTRY_SIZE	40
++#define AML_MPT_PARTS_OFFSET	24
++#define AML_MPT_MAX_PARTS	128
++
++static bool aml_mpt_checksum_valid(const u8 *table, unsigned int count)
++{
++	const u32 *words = (const u32 *)(table + AML_MPT_PARTS_OFFSET);
++	unsigned int i;
++	s32 sum = 0;
++
++	for (i = 0; i < count * AML_MPT_ENTRY_SIZE / sizeof(u32); i++)
++		sum += get_unaligned_le32(&words[i]);
++
++	return sum == (s32)get_unaligned_le32(table + 20);
++}
++
++static bool aml_mpt_name_valid(const u8 *entry)
++{
++	return entry[0] >= 0x20 && entry[0] < 0x7f;
++}
++
++static bool aml_mpt_names_valid(const u8 *header, unsigned int count)
++{
++	unsigned int i;
++
++	for (i = 0; i < count; i++)
++		if (!aml_mpt_name_valid(header + AML_MPT_PARTS_OFFSET +
++				i * AML_MPT_ENTRY_SIZE))
++			return false;
++	return true;
++}
++
++int aml_mpt_partition(struct parsed_partitions *state)
++{
++	Sector sect;
++	u8 *table;
++	unsigned int table_off, count, i, nr = 0;
++	int ret = 0;
++
++	table = kmalloc(AML_MPT_BYTES, GFP_KERNEL);
++	if (!table)
++		return -1;
++
++	for (i = 0; i < AML_MPT_SECTORS; i++) {
++		void *data = read_part_sector(state, AML_MPT_LBA + i, &sect);
++
++		if (!data) {
++			ret = -1;
++			goto out;
++		}
++		memcpy(table + i * 512, data, 512);
++		put_dev_sector(sect);
++	}
++
++	for (table_off = 0; table_off + AML_MPT_PARTS_OFFSET < AML_MPT_BYTES;
++	     table_off += 512) {
++		const u8 *header = table + table_off;
++
++		if (memcmp(header, "MPT\0", 4))
++			continue;
++
++		count = get_unaligned_le32(header + 16);
++		if (!count || count > AML_MPT_MAX_PARTS ||
++		    table_off + AML_MPT_PARTS_OFFSET +
++				count * AML_MPT_ENTRY_SIZE > AML_MPT_BYTES)
++			continue;
++
++		if (!aml_mpt_checksum_valid(header, count) &&
++		    !aml_mpt_names_valid(header, count))
++			continue;
++
++		for (i = 0; i < count && i + 1 < state->limit; i++) {
++			const u8 *entry = header + AML_MPT_PARTS_OFFSET +
++					i * AML_MPT_ENTRY_SIZE;
++			u64 size = get_unaligned_le64(entry + 16);
++			u64 offset = get_unaligned_le64(entry + 24);
++			sector_t from, sectors;
++
++			if (!aml_mpt_name_valid(entry) || !size ||
++			    (offset | size) & 511)
++				continue;
++
++			from = offset >> 9;
++			sectors = size >> 9;
++			if (!sectors || from > get_capacity(state->disk) ||
++			    sectors > get_capacity(state->disk) - from)
++				continue;
++
++			pr_info("aml_mpt: p%u name=%.*s off=0x%llx size=0x%llx\n",
++				i + 1, 16, entry,
++				(unsigned long long)offset,
++				(unsigned long long)size);
++			put_partition(state, i + 1, from, sectors);
++			state->parts[i + 1].has_info = true;
++			memcpy(state->parts[i + 1].info.volname, entry, 16);
++			nr++;
++		}
++
++		if (nr)
++			ret = 1;
++		break;
++	}
++
++out:
++	kfree(table);
++	return ret;
++}
+diff --git a/block/partitions/check.h b/block/partitions/check.h
+index d5b28e309d64..91d96a622650 100644
+--- a/block/partitions/check.h
++++ b/block/partitions/check.h
+@@ -59,6 +59,7 @@ int atari_partition(struct parsed_partitions *state);
+ int cmdline_partition(struct parsed_partitions *state);
+ int efi_partition(struct parsed_partitions *state);
+ int ibm_partition(struct parsed_partitions *);
++int aml_mpt_partition(struct parsed_partitions *state);
+ int karma_partition(struct parsed_partitions *state);
+ int ldm_partition(struct parsed_partitions *state);
+ int mac_partition(struct parsed_partitions *state);
+diff --git a/block/partitions/core.c b/block/partitions/core.c
+index 1ead8c001561..8c44bac447a1 100644
+--- a/block/partitions/core.c
++++ b/block/partitions/core.c
+@@ -42,6 +42,9 @@ static int (*check_part[])(struct parsed_partitions *) = {
+ 	adfspart_check_ADFS,
+ #endif
+ 
++#ifdef CONFIG_AML_MPT_PARTITION
++	aml_mpt_partition,
++#endif
+ #ifdef CONFIG_CMDLINE_PARTITION
+ 	cmdline_partition,
+ #endif
+diff --git a/drivers/gpu/drm/panfrost/panfrost_gpu.c b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+index f8355de6e335..688ddeb729c8 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_gpu.c
++++ b/drivers/gpu/drm/panfrost/panfrost_gpu.c
+@@ -73,6 +73,7 @@ int panfrost_gpu_soft_reset(struct panfrost_device *pfdev)
+ 	gpu_write(pfdev, GPU_INT_CLEAR, GPU_IRQ_MASK_ALL);
+ 	gpu_write(pfdev, GPU_INT_MASK, GPU_IRQ_MASK_ALL);
+ 
++	panfrost_gpu_amlogic_quirk(pfdev);
+ 	return 0;
+ }
+ 
+-- 
+2.43.0
+

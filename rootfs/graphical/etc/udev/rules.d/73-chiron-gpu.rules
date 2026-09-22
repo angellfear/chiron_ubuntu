@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Mali-G52 (panfrost on fe400000.bifrost): keep the GPU runtime-resident.
+#
+# This works around a resume fault in this vendor 5.15 tree, found on the board
+# after the panel went black roughly an hour into an idle session. In that state
+# nothing above the GPU is broken: wayfire is alive and still page-flipping (the
+# osd0 plane alternates between two framebuffers), the panel is powered with
+# dpms=On and the backlight lit, chiron-privacy answers on D-Bus and ShowClock
+# returns success, a freshly spawned client maps, and input is accepted. What
+# comes out of the compositor is simply a zero frame -- a grim capture of the
+# healthy session is 3.3 MB with all 256 byte values present, and of the failed
+# one 6.8 kB with exactly one distinct value, 0.
+#
+# The GPU is what differs. In the failure state panfrost is runtime-suspended,
+# its devfreq trans_stat shows no transitions at all, and at probe the driver
+# logs `dev_pm_opp_set_regulators: no regulator (mali) found: -19` -- there is no
+# mali supply in the DTS for the OPP layer to hold up across a power-off. No
+# panfrost, MMU or job errors are logged either way, so nothing reports the
+# failure: the shader cores come back without their state and every subsequent
+# render resolves to black.
+#
+# Forbidding runtime suspend keeps the block powered and the fault never occurs;
+# a soak of the same idle session with `power/control` set to on passed the hour
+# mark with the clock still drawn. The cost is the GPU's idle draw on a
+# wall-powered display, which is the cheaper side of this trade. The real fix is
+# a mali regulator in the DTS so the OPP layer can restore the rail, and this
+# rule goes away when that is proven.
+#
+# Both actions are matched on purpose. `add` fires before panfrost probes, and a
+# forbid taken there is remembered when the driver enables runtime PM; `bind`
+# fires after probe and covers the case where the driver re-allows it.
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="fe400000.bifrost", \
+    ATTR{power/control}="on"

@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:14 +0000
+Subject: [PATCH 16/44] drm/meson: reject atomic commits during shutdown
+ instead of sleeping
+
+Validated on this board.
+---
+ drivers/drm/meson_atomic.c | 7 +++++--
+ drivers/drm/meson_drv.c    | 5 +++++
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/drm/meson_atomic.c b/drivers/drm/meson_atomic.c
+index dbc9ee7d4..4fc675187 100644
+--- a/drivers/drm/meson_atomic.c
++++ b/drivers/drm/meson_atomic.c
+@@ -479,8 +479,11 @@ int meson_atomic_commit(struct drm_device *dev,
+ 	bool is_parallel = check_parallel_commit(state, &dest_crtc);
+ 
+ 	DRM_DEBUG("wait for no shutdown start!\n");
+-	wait_event_interruptible(priv->wq_shut_ctrl,
+-			!READ_ONCE(priv->shutdown_on));
++	/* A commit arriving during shutdown must fail, not sleep forever. */
++	if (READ_ONCE(priv->shutdown_on)) {
++		DRM_INFO("Reject atomic commit during shutdown\n");
++		return -ESHUTDOWN;
++	}
+ 	DRM_DEBUG("wait for no shutdown end!\n");
+ 
+ 	if (is_parallel && dest_crtc)
+diff --git a/drivers/drm/meson_drv.c b/drivers/drm/meson_drv.c
+index 5b8b0eced..61d4265fd 100644
+--- a/drivers/drm/meson_drv.c
++++ b/drivers/drm/meson_drv.c
+@@ -747,8 +747,10 @@ static void am_meson_drv_shutdown(struct platform_device *pdev)
+ 
+ 	dev = priv->drm;
+ 
++	DRM_INFO("%s: atomic shutdown begin\n", __func__);
+ 	/* prevent drm_wait_vblank_ioctl on waiting event*/
+ 	drm_atomic_helper_shutdown(dev);
++	DRM_INFO("%s: atomic shutdown done\n", __func__);
+ 
+ 	DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
+ 
+@@ -765,12 +767,15 @@ static void am_meson_drv_shutdown(struct platform_device *pdev)
+ 
+ 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
+ 
++	DRM_INFO("%s: commit workers stopping\n", __func__);
+ 	/* flush kworker of commit thread and stop the thread */
+ 	DRM_INFO("%s: try to flush worker\n", __func__);
+ 	for (i = 0; i < priv->num_crtcs; i++) {
+ 		drm_thread = &priv->commit_thread[i];
+ 		if (drm_thread->thread) {
++			DRM_INFO("%s: flush worker %d begin\n", __func__, i);
+ 			kthread_flush_worker(&drm_thread->worker);
++			DRM_INFO("%s: flush worker %d done\n", __func__, i);
+ 			kthread_stop(drm_thread->thread);
+ 			drm_thread->thread = NULL;
+ 		}

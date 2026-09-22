@@ -1,0 +1,63 @@
+From 86c1b3ae902aaf6ed2a5a455d29bc70f66bd8ef1 Mon Sep 17 00:00:00 2001
+From: Chiron Integration <chiron@localhost>
+Date: Fri, 28 Aug 2026 13:28:56 +0000
+Subject: [PATCH 1/2] aml_drv: build the W2 fullmac driver on Linux 5.15
+
+The locked upstream targets the Android 5.4 vendor tree. On 5.15 the legacy
+file I/O helpers live in a VFS namespace and the non-exported file-stat path
+is gone, so the module fails to load with unresolved symbols.
+
+Hardware-accepted on this board, against the same frozen upstream commit
+fb0f89229a0daffea29f1055d74c07272b6e7697.
+---
+ aml_drv/aml_compat.h       | 11 ++++++-----
+ aml_drv/fullmac/aml_main.c |  5 +++++
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/aml_drv/aml_compat.h b/aml_drv/aml_compat.h
+index d099a08..9bddeff 100644
+--- a/aml_drv/aml_compat.h
++++ b/aml_drv/aml_compat.h
+@@ -526,10 +526,11 @@ static inline void SKB_APPEND(struct sk_buff *old, struct sk_buff *newsk, struct
+ /******************************************************************************
+  * File
+  *****************************************************************************/
+-#if defined(__ANDROID_COMMON_KERNEL__) || defined(CONFIG_AML_ANDROID) || defined(CONFIG_BUILDROOT)
+-  #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+-    #define DISABLE_FILE_OPS
+-  #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++  /* vfs_stat() reaches the non-exported vfs_fstatat() on 5.15. */
++  #define DISABLE_FILE_OPS
++#elif defined(__ANDROID_COMMON_KERNEL__) || defined(CONFIG_AML_ANDROID) || defined(CONFIG_BUILDROOT)
++  #define DISABLE_FILE_OPS
+ #endif
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+@@ -570,7 +571,7 @@ static inline int FILE_CLOSE(struct file *filp, fl_owner_t id)
+ 
+ static inline int FILE_STAT(const char __user *filename, struct kstat *stat)
+ {
+-#if defined (CONFIG_ANDROID_GKI) || defined (CONFIG_BUILDROOT)
++#if defined(DISABLE_FILE_OPS) || defined(CONFIG_ANDROID_GKI) || defined(CONFIG_BUILDROOT)
+ 	UNUSED(filename);
+ 	UNUSED(stat);
+ 	return -ENOTSUPP;
+diff --git a/aml_drv/fullmac/aml_main.c b/aml_drv/fullmac/aml_main.c
+index e2c07be..9028ebe 100644
+--- a/aml_drv/fullmac/aml_main.c
++++ b/aml_drv/fullmac/aml_main.c
+@@ -6754,5 +6754,10 @@ MODULE_FIRMWARE(AML_CONFIG_FW_NAME);
+ 
+ MODULE_DESCRIPTION(RW_DRV_DESCRIPTION);
+ MODULE_VERSION(AML_VERS_MOD);
++
++/* Linux 5.15 namespaces the legacy file I/O helpers used by this driver. */
++#if defined(MODULE_IMPORT_NS)
++MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
++#endif
+ MODULE_AUTHOR(RW_DRV_COPYRIGHT " " RW_DRV_AUTHOR);
+ MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Read-only Android volumes shown by the standard GIO/GVfs file-manager UI.
+# The source paths are root-owned bindfs views prepared at boot. `user` lets
+# the desktop's normal mount action attach/detach only these fixed bind mounts;
+# the underlying ext4 and device-mapper layers remain mounted read-only.
+/run/chiron-android-volumes/view/system     /media/Android-system     none bind,ro,nosuid,nodev,noexec,user,noauto,x-gvfs-show,x-gvfs-name=Android-system 0 0
+/run/chiron-android-volumes/view/system_ext /media/Android-system_ext none bind,ro,nosuid,nodev,noexec,user,noauto,x-gvfs-show,x-gvfs-name=Android-system_ext 0 0
+/run/chiron-android-volumes/view/vendor     /media/Android-vendor     none bind,ro,nosuid,nodev,noexec,user,noauto,x-gvfs-show,x-gvfs-name=Android-vendor 0 0
+/run/chiron-android-volumes/view/product    /media/Android-product    none bind,ro,nosuid,nodev,noexec,user,noauto,x-gvfs-show,x-gvfs-name=Android-product 0 0
+/run/chiron-android-volumes/view/odm        /media/Android-odm        none bind,ro,nosuid,nodev,noexec,user,noauto,x-gvfs-show,x-gvfs-name=Android-odm 0 0

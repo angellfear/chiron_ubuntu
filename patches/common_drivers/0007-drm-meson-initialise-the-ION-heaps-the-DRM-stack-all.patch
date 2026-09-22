@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 19:46:13 +0000
+Subject: [PATCH 07/44] drm/meson: initialise the ION heaps the DRM stack
+ allocates from
+
+Validated on this board.
+---
+ drivers/media/media_main.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/media/media_main.c b/drivers/media/media_main.c
+index c421e42e4..2d6714826 100644
+--- a/drivers/media/media_main.c
++++ b/drivers/media/media_main.c
+@@ -103,6 +103,8 @@ static int __init media_main_init(void)
+ 		call_sub_init(ion_device_create_init);
+ 		call_sub_init(ion_system_contig_heap_create_init);
+ 		call_sub_init(ion_system_heap_create_init);
++		/* Required before aml_drm dma-buf allocation. */
++		call_sub_init(ion_init);
+ 		call_sub_init(add_meson_cma_heap);
+ 		call_sub_init(amlogic_heap_secure_dma_buf_init);
+ 		call_sub_init(mua_init);

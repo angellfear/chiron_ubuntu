@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Overrides for /usr/local/bin/chiron-autorotate. The defaults in the script are
+# the values measured on this panel; change them here rather than editing it.
+
+# OUTPUT=DSI-1
+# POLL=1
+
+# Wayland output transforms for the two hinge detents. 270 is what this panel
+# wants -- 90 was tried and puts landscape upside down.
+# TRANSFORM_FLAT=normal
+# TRANSFORM_TILTED=270
+
+# Schmitt trigger on the sensor's X component, in g.
+# FLOOR=0.15
+# X_ON=0.30
+# X_OFF=0.20

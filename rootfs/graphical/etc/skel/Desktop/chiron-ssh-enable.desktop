@@ -1,0 +1,10 @@
+[Desktop Entry]
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+Type=Application
+Name=Включить SSH
+Comment=Запустить сервер SSH и оставить его включённым
+Exec=/usr/local/bin/chiron-ssh-enable
+Icon=network-server
+Terminal=false
+Categories=System;Network;

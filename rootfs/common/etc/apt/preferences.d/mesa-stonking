@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+#
+# Mesa and libdrm follow the next release; nothing else does.
+#
+# The release ships Mesa 26.0 and its updates pocket only point releases of
+# that series. The Mali-G52 is driven by panfrost, which moves fast, so the
+# image takes the newest Mesa the archive builds -- from the next release,
+# which is built against the same glibc and LLVM as this one. libdrm comes
+# along because that Mesa requires a newer one.
+#
+# Everything else from those suites is pinned below zero and can never be
+# installed, so a dependency that exists only there fails the install loudly
+# instead of dragging part of the next release in. The first matching record
+# wins, so the source-package records have to stay above the wildcard ones.
+Package: src:mesa src:libdrm
+Pin: release n=stonking
+Pin-Priority: 990
+
+Package: src:mesa src:libdrm
+Pin: release n=stonking-proposed
+Pin-Priority: 990
+
+Package: *
+Pin: release n=stonking
+Pin-Priority: -1
+
+Package: *
+Pin: release n=stonking-proposed
+Pin-Priority: -1

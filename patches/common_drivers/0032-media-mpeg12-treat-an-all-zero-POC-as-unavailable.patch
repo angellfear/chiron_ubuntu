@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Fri, 28 Aug 2026 18:45:19 +0000
+Subject: [PATCH 32/44] media: mpeg12: treat an all-zero POC as unavailable
+
+(cherry picked from commit 64e675ffbc3ea700d1de578e9780d2c8fc6f2c86)
+---
+ .../decoder_v4l/mpeg12/vmpeg12_multi.c        | 22 +++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/drivers/media_modules/frame_provider/decoder_v4l/mpeg12/vmpeg12_multi.c b/drivers/media_modules/frame_provider/decoder_v4l/mpeg12/vmpeg12_multi.c
+index 5df3d6bb6..9a8acf213 100644
+--- a/drivers/media_modules/frame_provider/decoder_v4l/mpeg12/vmpeg12_multi.c
++++ b/drivers/media_modules/frame_provider/decoder_v4l/mpeg12/vmpeg12_multi.c
+@@ -2159,8 +2159,30 @@ static void check_ref_error(struct vdec_mpeg12_hw_s *hw, int index)
+ static bool check_ref_poc(struct vdec_mpeg12_hw_s *hw, int index)
+ {
+ 	struct pic_info_t *pic = NULL;
++	int i;
+ 
+ 	pic = &hw->pics[index];
++
++	/*
++	 * T7's frame-mode MPEG-2 microcode does not publish temporal_reference
++	 * through AV_SCRATCH_1: the current picture and every valid reference
++	 * retain the reset value zero.  Treat that all-zero state as "POC is not
++	 * available" instead of marking every P/B picture corrupt.  Reference
++	 * existence and propagated decoder-error checks still run separately in
++	 * check_ref_error(), and normal POC ordering remains enforced as soon as
++	 * the microcode supplies any non-zero value.
++	 */
++	if (!pic->poc) {
++		for (i = 0; i < ARRAY_SIZE(hw->refs); i++)
++			if (hw->refs[i] >= 0 && hw->refs[i] < hw->buf_num &&
++			    hw->pics[hw->refs[i]].poc)
++				break;
++		if (i == ARRAY_SIZE(hw->refs)) {
++			pr_info_once("T7 frame-mode POC unavailable; using reference error flags\n");
++			return false;
++		}
++	}
++
+ 	if ((pic->buffer_info & PICINFO_TYPE_MASK) == PICINFO_TYPE_B) {
+ 		if ((hw->refs[0] >= 0) && (hw->refs[0] < hw->buf_num) &&
+ 			(hw->refs[1] >= 0) && (hw->refs[1] < hw->buf_num)) {

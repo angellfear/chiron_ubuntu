@@ -1,0 +1,3 @@
+# One relative patch path per line after hardware acceptance.
+0001-config-add-thin-Chiron-board-definition.patch
+0002-config-select-the-Chiron-kernel-defconfig.patch

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Power on the Telink ZBHCI coordinator
+Documentation=file:/usr/local/lib/chiron-zigbee/zbhci_host_std_v2.py
+# The coordinator hangs off UART_D. Its power, reset and boot lines are driven
+# with gpiod rather than by a driver: the vendor's zigbee-control module, which
+# is all its DT node is for, is proprietary and this kernel does not have it.
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+ConditionPathExists=/dev/ttyS3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PYTHONPATH=/usr/local/lib/chiron-zigbee
+ExecStart=/usr/bin/python3 -c "from zbhci_host_std_v2 import power_on; power_on()"
+
+[Install]
+WantedBy=multi-user.target

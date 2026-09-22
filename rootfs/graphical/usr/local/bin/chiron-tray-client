@@ -1,0 +1,36 @@
+#!/bin/sh
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Start a StatusNotifierItem client once the panel can actually draw it.
+#
+# wf-panel is both the session's StatusNotifierWatcher and its only
+# StatusNotifierHost, and it takes the watcher name before its host side is
+# ready. An item that registers in that window is accepted and then never
+# rendered: the watcher's RegisteredStatusNotifierItems does list it, no error
+# is logged anywhere, and the tray simply stays empty for the rest of the
+# session. Restarting the client afterwards makes the icon appear, which is how
+# this was pinned down.
+#
+# Every wayfire.ini autostart fires in the same second, so blueman lost that
+# race about as often as it won it. Patching the panel would be the other
+# fix; this image is built from archive packages and carries no such patch,
+# so the client waits for the host name to exist before starting.
+#
+# Bounded on purpose: if the panel never comes up, start the client anyway --
+# an unrendered tray icon is a smaller loss than the client not running at all.
+set -eu
+
+[ "$#" -ge 1 ] || { echo "usage: $0 COMMAND [ARG...]" >&2; exit 2; }
+
+i=0
+while [ "$i" -lt 100 ]; do
+    if busctl --user list --no-legend 2>/dev/null \
+        | grep -q 'org\.kde\.StatusNotifierHost-'; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 0.1
+done
+[ "$i" -lt 100 ] || echo "[chiron-tray] no StatusNotifier host after 10s; starting $1 anyway" >&2
+
+exec "$@"

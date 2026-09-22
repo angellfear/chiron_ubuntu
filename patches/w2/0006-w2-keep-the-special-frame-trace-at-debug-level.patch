@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Mon, 21 Sep 2026 21:37:43 +0000
+Subject: [PATCH] w2: keep the special-frame trace at debug level
+
+The fullmac driver prints every special frame it recognises with printk():
+EAPOL, ARP and DHCP on the data path, action, auth and assoc-rsp on the
+management path.  The access point here ARPs the station every few seconds,
+so "[SP FRAME RX] arp req ..." is a permanent stream into the kernel log and
+the persistent journal, and the ramoops record that has to hold a crash
+trace is spent on routine traffic: in the dmesg record of the 2026-09-22
+SError panic the whole minute before the panic is this trace and nothing
+else.
+
+Demote the six trace call sites to pr_debug(), the treatment patches 0004
+and 0005 already gave the scan payload and command traces.  The text and
+the conditions stay exactly as the vendor wrote them; this kernel is built
+without CONFIG_DYNAMIC_DEBUG, so pr_debug() compiles the calls away, and
+defining DEBUG at the top of aml_tx.c brings the whole trace back when
+Wi-Fi itself is under investigation.
+---
+ aml_drv/fullmac/aml_tx.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/aml_drv/fullmac/aml_tx.c b/aml_drv/fullmac/aml_tx.c
+index 174a298..07ebd3f 100644
+--- a/aml_drv/fullmac/aml_tx.c
++++ b/aml_drv/fullmac/aml_tx.c
+@@ -1260,7 +1260,7 @@ bool aml_filter_sp_data_frame(struct sk_buff *skb, struct aml_vif *aml_vif, AML_
+     if (ethhdr->h_proto == htons(ETH_P_PAE)) {
+         offset += sprintf(p + offset, sp_frame_status_trace[sp_status]);
+         offset += sprintf(p + offset, "eapol,vif_idx:%d",aml_vif->vif_index);
+-        printk("%s\n", p);
++        pr_debug("%s\n", p);
+         return true;
+     }
+ 
+@@ -1293,7 +1293,7 @@ bool aml_filter_sp_data_frame(struct sk_buff *skb, struct aml_vif *aml_vif, AML_
+ 
+         if (((sp_status == SP_STATUS_RX) && (!memcmp(target_ip, &aml_vif->ipv4_addr, IPV4_ADDR_LEN)))
+             || (sp_status != SP_STATUS_RX))
+-            printk("%s\n", p);
++            pr_debug("%s\n", p);
+ 
+         return false; // Solving the compatibility problem between w2 softap and mtk
+     }
+@@ -1323,7 +1323,7 @@ bool aml_filter_sp_data_frame(struct sk_buff *skb, struct aml_vif *aml_vif, AML_
+         if (is_dhcpv4 || is_dhcpv6) {
+             offset += sprintf(p + offset, sp_frame_status_trace[sp_status]);
+             offset += sprintf(p + offset, "DHCP[%d %d], vif_idx:%d", is_dhcpv4,is_dhcpv6, aml_vif->vif_index);
+-            printk("%s\n", p);
++            pr_debug("%s\n", p);
+             return true;
+         }
+     }
+@@ -1437,7 +1437,7 @@ uint32_t aml_filter_sp_mgmt_frame(struct aml_vif *vif, u8 *buf, AML_SP_STATUS_E
+             }
+             p[offset] = '\0';
+ 
+-            printk("%s\n", p);
++            pr_debug("%s\n", p);
+             return ret;
+             break;
+         }
+@@ -1447,14 +1447,14 @@ uint32_t aml_filter_sp_mgmt_frame(struct aml_vif *vif, u8 *buf, AML_SP_STATUS_E
+             offset += sprintf(p + offset, sp_frame_status_trace[sp_status]);
+             offset += sprintf(p + offset, "auth algo:%d ", auth_algo);
+             p[offset] = '\0';
+-            printk("%s\n", p);
++            pr_debug("%s\n", p);
+             return ret;
+         }
+         case ASSOC_RSP_TYPE: {
+             offset += sprintf(p + offset, sp_frame_status_trace[sp_status]);
+             offset += sprintf(p + offset, "ASSOC_RSP");
+             p[offset] = '\0';
+-            printk("%s\n", p);
++            pr_debug("%s\n", p);
+             return ret;
+         }
+         case PROBE_RSP_TYPE: {

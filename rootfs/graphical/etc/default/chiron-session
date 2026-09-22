@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+# Knobs for the Wayland session, sourced by /usr/local/bin/wayfire-session.
+#
+# This file exists so that a display problem on this vendor DRM stack can be
+# bisected by editing one line and rebooting, instead of rebuilding and
+# redeploying a 500 MB image for each attempt. Everything here is an
+# environment variable wlroots or Mesa reads; the session script exports
+# whatever this file sets.
+#
+# /etc is in the read-only squashfs, so an edit lands in the overlay -- which is
+# exactly right for an experiment, and is wiped when the overlay is reseeded.
+# A setting that turns out to be the answer belongs back in this file in the
+# repository, with the reason written down.
+
+# ---------------------------------------------------------------------------
+# Scanout buffer layout.
+#
+# ON, and not an experiment. The Mali renders into an ARM AFBC buffer
+# (modifier 0x800000000000062: 32x8 blocks, SPLIT|SPARSE) and the AFBC decoder
+# in aml_drm cannot read that layout back -- it produced "*ERROR* afbc error
+# happened, 6-1" in bursts and a picture that came apart in bands. This forces
+# the buffer the display reads to be linear. The GPU still renders with AFBC.
+WLR_DRM_NO_MODIFIERS=1
+
+# ---------------------------------------------------------------------------
+# On-screen keyboard languages.
+#
+# The keyboard key in wvkbd cycles this ordered list. English and Russian are
+# enabled in the production image; symbols stay as the last page. The bundled
+# mobintl keyboard can also load arabic, persian, greek, georgian, hebrew,
+# emoji, nav and dialer. A user can override these two variables without root
+# in ~/.config/chiron/keyboard.conf; wayfire-session reads that file after this
+# one. The new list takes effect at the next login.
+WVKBD_LAYERS=full,cyrillic,special
+WVKBD_LANDSCAPE_LAYERS=landscape,cyrillic,landscapespecial
+# Example user override adding Greek to both orientations:
+# WVKBD_LAYERS=full,cyrillic,greek,special
+# WVKBD_LANDSCAPE_LAYERS=landscape,cyrillic,greek,landscapespecial
+
+# ---------------------------------------------------------------------------
+# Direct scanout.
+#
+# OFF, and the reason is written here so the same idea is not tried twice.
+#
+# The symptom is a vertical video played fullscreen at transform 0 (the panel's
+# native portrait): the picture comes apart into horizontal bands, each showing
+# a different moment of the video. Rotate to transform 270 and it is clean. That
+# looked like direct scanout -- at transform 0 a fullscreen client buffer can go
+# straight to the display plane, while a rotated output must be composited and
+# so never takes that path -- so this was set to 1 and tested.
+#
+#     WAYFIRE_DISABLE_DIRECT_SCANOUT=1
+#
+# It made no difference: the bands were unchanged, and a grim capture -- which
+# reads what the compositor produced, not what the plane displayed -- showed the
+# bands in the composited buffer. Whatever tears this frame has already torn
+# before the display controller sees it, so the plane path is not the cause.
+#
+# Left off. Disabling it means compositing every fullscreen frame through the
+# GPU, which on this board costs bandwidth that video playback needs.

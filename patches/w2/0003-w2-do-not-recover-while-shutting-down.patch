@@ -1,0 +1,94 @@
+From 324bcd4cd91f127d66fae9ba84a111545ef05148 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Wed, 2 Sep 2026 06:59:30 +0000
+Subject: [PATCH] w2: do not recover while shutting down
+
+---
+ aml_drv/aml_recy.c | 37 +++++++++++++++++++++++++++++--------
+ 1 file changed, 29 insertions(+), 8 deletions(-)
+
+diff --git a/aml_drv/aml_recy.c b/aml_drv/aml_recy.c
+index aa3ddec..ce1e284 100644
+--- a/aml_drv/aml_recy.c
++++ b/aml_drv/aml_recy.c
+@@ -253,12 +253,22 @@ int aml_recy_fw_reload_for_usb_sdio(struct aml_hw *aml_hw)
+     int ret = 0;
+     int try_cnt = 0;
+ 
++    if (atomic_read(&g_wifi_pm.is_shut_down)) {
++        RECY_DBG("skip firmware reload during shutdown");
++        return -ESHUTDOWN;
++    }
++
+     RECY_DBG("reload fw start");
+ 
+     aml_recy_flags_set(AML_RECY_FW_ONGOING | AML_RECY_IPC_ONGOING);
+     bus_state_detect.is_recy_ongoing = 1;
+ Try_again:
+ 
++    if (atomic_read(&g_wifi_pm.is_shut_down)) {
++        ret = -ESHUTDOWN;
++        goto out;
++    }
++
+     aml_platform_off(aml_hw, NULL);
+     if (aml_bus_type != PCIE_MODE) {
+         aml_clear_reorder_list();
+@@ -305,7 +315,7 @@ Try_again:
+     RECY_DBG("recy fw reload success!!!\n");
+ out:
+ #ifndef CONFIG_PT_MODE
+-    if (ret && try_cnt < 3) {
++    if (ret && !atomic_read(&g_wifi_pm.is_shut_down) && try_cnt < 3) {
+         try_cnt++;
+         ret = 0;
+         RECY_DBG("fw reload fail, try again(%d)\n", try_cnt);
+@@ -594,6 +604,11 @@ int aml_recy_doit(struct aml_hw *aml_hw)
+                 | AML_RECY_CLOSE_VIF_PROC;
+     unsigned char fbuf[64] = {0};
+ 
++    if (atomic_read(&g_wifi_pm.is_shut_down)) {
++        RECY_DBG("skip recovery during shutdown");
++        return 0;
++    }
++
+     scnprintf(fbuf, sizeof(fbuf), "recovery reason: 0x%02x(%s)\n", aml_recy->reason, aml_recy_reason_code2str[aml_recy->reason]);
+     AML_INFO("%s", fbuf);
+     if (aml_bus_type != PCIE_MODE)
+@@ -619,6 +634,11 @@ int aml_recy_doit(struct aml_hw *aml_hw)
+     }
+     aml_recy_flags_clr(AML_RECY_DROP_XMIT_PKT);
+ 
++    if (atomic_read(&g_wifi_pm.is_shut_down)) {
++        ret = 0;
++        goto out;
++    }
++
+     ret = aml_recy_fw_reload(aml_hw);
+     if (ret) {
+         RECY_DBG("fw reload failed");
+@@ -633,13 +653,14 @@ int aml_recy_doit(struct aml_hw *aml_hw)
+ 
+ out:
+     aml_recy->link_loss.is_requested = 0;
+-    // recovery ps mode
+-    aml_send_me_set_ps_mode(aml_hw, aml_recy->ps_state);
+-    /* clear suspend state flag */
+-    atomic_set(&g_wifi_pm.bus_suspend_cnt, 0);
+-    atomic_set(&g_wifi_pm.drv_suspend_cnt, 0);
+-    atomic_set(&g_wifi_pm.is_shut_down, 0);
+-    aml_hw->state = WIFI_SUSPEND_STATE_NONE;
++    if (!atomic_read(&g_wifi_pm.is_shut_down)) {
++        // recovery ps mode
++        aml_send_me_set_ps_mode(aml_hw, aml_recy->ps_state);
++        /* clear suspend state flag */
++        atomic_set(&g_wifi_pm.bus_suspend_cnt, 0);
++        atomic_set(&g_wifi_pm.drv_suspend_cnt, 0);
++        aml_hw->state = WIFI_SUSPEND_STATE_NONE;
++    }
+     spin_lock_bh(&aml_recy->aml_hw->cmd_mgr.lock);
+     aml_recy->reason = 0;
+     spin_unlock_bh(&aml_recy->aml_hw->cmd_mgr.lock);
+-- 
+2.43.0
+

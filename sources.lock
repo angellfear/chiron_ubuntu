@@ -1,0 +1,99 @@
+# Public immutable upstream inputs. Never add credentials or private URLs.
+UBUNTU_RELEASE=26.04
+UBUNTU_CODENAME=resolute
+UBUNTU_ARCH=arm64
+UBUNTU_PORTS_URL=http://ports.ubuntu.com/ubuntu-ports
+
+FENIX_URL=https://github.com/khadas/fenix.git
+FENIX_REF=refs/heads/master
+FENIX_COMMIT=1eded14ff94001cee8b6350adff1dc03292f2743
+
+LINUX_URL=https://github.com/khadas/linux.git
+LINUX_REF=refs/heads/khadas-vims-5.15.y
+LINUX_COMMIT=4e557e233b9da219f48b82bfa313f353386097ec
+
+COMMON_DRIVERS_URL=https://github.com/khadas/common_drivers.git
+COMMON_DRIVERS_REF=refs/heads/khadas-vims-5.15.y
+COMMON_DRIVERS_COMMIT=3a11a86a02e759fc57fc79410215f7c0c3a0d8e0
+
+# Amlogic W2 (RTL8852CS class) Wi-Fi/BT fullmac driver, built as external
+# modules against the same kernel and Module.symvers.
+W2_URL=https://github.com/khadas/android_common_driver_modules_wifi_bt_wifi_amlogic_w2.git
+W2_REF=refs/heads/main
+W2_COMMIT=fb0f89229a0daffea29f1055d74c07272b6e7697
+
+# Himax HX83102 in-cell touch controller. Google's Android module for the
+# Pixel 6a (bluejay) panel, which is the same controller family; built as an
+# external module against the same kernel and Module.symvers.
+HIMAX_URL=https://android.googlesource.com/kernel/google-modules/touch/himax_touch
+HIMAX_REF=refs/heads/android-gs-bluejay-5.10-android13-qpr3
+HIMAX_COMMIT=43080d1c8704c1e73bb9a1bda90f6173f9915cc3
+
+# The V4L2 loopback module, the public camera node. The vendor ISP does not
+# recover from STREAMOFF, so one hardware stream is held open and republished
+# through this, which browsers can open and close freely. Pinned at 0.12.7,
+# the accepted release -- its module parameters are what the
+# udev rules and the bridge in this image expect. The commit is the one tag
+# v0.12.7 points at: the ref has to name a branch because prepare_tree derives
+# the local branch name from it, and a tag's own object id is not a commit.
+V4L2LOOPBACK_URL=https://github.com/umlaeute/v4l2loopback.git
+V4L2LOOPBACK_REF=refs/heads/main
+V4L2LOOPBACK_COMMIT=1ecf810f0d687b647caa3050ae30cf51b5902afd
+
+# OP-TEE normal-world client. Android's tee-supplicant and libteec are
+# bionic-linked and cannot run here, so the same protocol is built against
+# glibc from upstream at the accepted commit.
+OPTEE_CLIENT_URL=https://github.com/OP-TEE/optee_client.git
+OPTEE_CLIENT_REF=refs/heads/master
+OPTEE_CLIENT_COMMIT=ab96380ccab2e6710d873093db6552f7f5018e47
+
+# Amlogic vendor userspace for the hardware video path, from the Khadas
+# repository. These are binary vendor packages with no source to build, so they
+# are pinned the way the git trees are pinned by commit: by URL and SHA-256.
+# They are not put into the image: assemble-output.sh writes these pins into
+# it, and chiron-vendor-fetch downloads the packages on the board.
+#
+# Five of the seven are the exact files accepted before, checksum
+# for checksum. libamvenc and libmultienc are the ~noble rebuilds of the same
+# upstream versions -- the .deb wrappers differ, every file inside them is
+# byte-identical to the accepted copies, verified by unpacking both.
+VENDOR_DEB_BASE=http://dl.khadas.com/repos/vim4/pool/main
+
+VENDOR_DEB_ION=libi/libion/libion_0.4-202406_arm64.deb
+VENDOR_DEB_ION_SHA256=7eb8eb41e0a97a10a3f434afd06778a2b22480ec004e20beedfe60c3877a50fc
+
+VENDOR_DEB_GE2D=libg/libge2d/libge2d_0.4-202406_arm64.deb
+VENDOR_DEB_GE2D_SHA256=6bc3fdf26e07ce036fc74ec74ad7494ad663307ecfc8a7b2db02da59bcde3f5c
+
+VENDOR_DEB_JPEGENC=libj/libjpegenc/libjpegenc_0.4-202406_arm64.deb
+VENDOR_DEB_JPEGENC_SHA256=e65feb274b1750e8961b670d4ce6ea708158b2a4ea543c9722b7be35ebb1808c
+
+VENDOR_DEB_AMVENC=liba/libamvenc/libamvenc_0.2-202406~noble_arm64.deb
+VENDOR_DEB_AMVENC_SHA256=bba5b248f0111bed1fde5c6996f5272eb6d4b03a270323dcadc20cca9e0aba59
+
+VENDOR_DEB_MULTIENC=libm/libmultienc/libmultienc_0.7-202406~noble_arm64.deb
+VENDOR_DEB_MULTIENC_SHA256=629aff8c5d106b4fa6b1a3c0d5e8332cc1f9ec9a3b9987c75c83f4facbd6fdae
+
+VENDOR_DEB_DRMBUFFERPOOL=g/gst-aml-drmbufferpool-plugins/gst-aml-drmbufferpool-plugins_0.2-202311_arm64.deb
+VENDOR_DEB_DRMBUFFERPOOL_SHA256=d9b837adbd96c70980f57b14a996c9e1129ed94b4932512c326e37719ebcb03f
+
+VENDOR_DEB_GSTREAMER_AML=g/gstreamer-aml/gstreamer-aml_0.5-202406_arm64.deb
+VENDOR_DEB_GSTREAMER_AML_SHA256=190c05562152437f771d3f93b85fccaebe5397a2125f988644380ac4d3ab8f0b
+
+# The Amlogic ISP userspace, ispaml 0.8-202512~1.5: the four headers
+# chiron_ov13b10.c compiles against, and the runtime the ISP service is made of.
+# Khadas' own pool stops at 0.6 and has no resolute suite, but 0.8 is published
+# in the multimedia_debs_aml repository. Pinned by the archive commit and by the
+# checksum of both the archive and the .deb inside it -- the four libraries in
+# that .deb are byte-identical to the ones accepted before, which is
+# how this package was identified as the right one.
+ISPAML_URL=https://github.com/numbqq/multimedia_debs_aml/archive/0bb677edc748670b1dc4eb14951430c6fffbeec9.tar.gz
+ISPAML_SHA256=f4479b538a72c37c1ae389e0f5b3d3adf5e918f6a189502753a547430d305294
+ISPAML_DEB=focal/arm64/ispaml_0.8-202512~1.5_arm64.deb
+ISPAML_DEB_SHA256=94614565835bbb9ae127e3c7f0e7d4ded585dd7146e45bbfc88ff22cb8bceef0
+
+# The ADLA user-mode driver, the same accepted version. The
+# kernel driver is built from common_drivers by scripts/builder/build-npu.sh;
+# this is the userspace half.
+VENDOR_DEB_ADLA=liba/libadla/libadla_0.6-202409_arm64.deb
+VENDOR_DEB_ADLA_SHA256=1ef9b01f184d738c5fb00b1c8e5c5df74bf516725e253e78f4923cd78c3403d6

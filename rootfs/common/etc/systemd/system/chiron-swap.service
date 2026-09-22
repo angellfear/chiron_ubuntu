@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Swap in compressed RAM (zram)
+Documentation=file:/usr/local/sbin/chiron-swap
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/chiron-swap
+ExecStop=/sbin/swapoff /dev/zram0
+
+[Install]
+# NOT swap.target, which is the obvious choice and is a dependency loop:
+# swap.target is ordered Before=sysinit.target while an ordinary service is
+# ordered After=basic.target, itself After=sysinit.target. systemd resolves
+# that by deleting the swap.target job -- "Ordering cycle found, skipping
+# swap.target" in the boot log -- and whether the swap ends up enabled then
+# depends on whatever else happened to pull the service in.
+#
+# Nothing before multi-user needs the swap: it exists for the desktop, which
+# starts later still.
+WantedBy=multi-user.target

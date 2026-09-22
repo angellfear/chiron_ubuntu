@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (c) 2026 angellfear
+[Unit]
+Description=Preload the Chiron secure video firmware
+Documentation=file:/usr/local/bin/chiron_preload_fw
+# The T7 video decoder's processor stays unstarted until the secure world has
+# the microcode: tee_load_video_fw() answers TEEC_ERROR_BAD_STATE and nothing
+# decodes. The package fed to the TA is Android's signed 1,951,232-byte
+# video_ucode.bin, not the 389,696-byte T7 file that ships with some builds --
+# feeding that one to the TA reaches its RSA check and fails with vendor result
+# 0xffff3072.
+#
+# The same file is what the normal-world driver asks the firmware loader for, so
+# it lives at the firmware path both halves can reach rather than being carried
+# twice under two names. It used to be kept privately as video_ucode.secure.bin,
+# which cost 1.9 MiB of image for a second copy of identical bytes and left
+# firmware_vdec failing its own load with -2 at every boot.
+Requires=chiron-tee-supplicant.service
+After=chiron-tee-supplicant.service
+Before=chiron-codec-load.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=60
+ExecStartPre=/bin/sh -c 'echo 1 > /sys/class/tee_info/sys_boot_complete'
+ExecStart=/usr/local/bin/chiron_preload_fw /usr/lib/firmware/video/video_ucode.bin
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

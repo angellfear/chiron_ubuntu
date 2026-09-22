@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Wed, 2 Sep 2026 18:20:00 +0000
+Subject: [PATCH] w2: rate-limit scan payload buffer wrap diagnostics
+
+The firmware reports enough scan-result payload to wrap the driver's bounded
+scratch buffer during ordinary NetworkManager scans.  The existing wrap is
+safe: it resets the offset before copying the next payload.  Logging it with
+AML_INFO, however, floods the kernel journal while Wi-Fi remains connected.
+
+Keep the proven existing wrap behaviour and demote its diagnostic to a
+rate-limited debug message.  This preserves visibility for driver debugging
+without presenting expected scan traffic as an error.
+---
+ aml_drv/fullmac/aml_rx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/aml_drv/fullmac/aml_rx.c b/aml_drv/fullmac/aml_rx.c
+index fff86e7..3fa8949 100644
+--- a/aml_drv/fullmac/aml_rx.c
++++ b/aml_drv/fullmac/aml_rx.c
+@@ -1501,7 +1501,7 @@ void aml_scan_rx(struct aml_hw *aml_hw, struct hw_rxhdr *hw_rxhdr, struct sk_bu
+             /*scanres payload process end*/
+             if (aml_hw->scanres_payload_buf_offset + le32_to_cpu(hw_rxhdr->hwvect.len) > SCAN_RESULTS_MAX_CNT*500) {
+                 aml_hw->scanres_payload_buf_offset = 0;
+-                AML_INFO("scanres_payload_buf overflow, flush");
++                pr_debug_ratelimited("aml_w2: scan result payload buffer wrapped\\n");
+             }
+             /*scanres payload process start*/
+             memcpy(aml_hw->scanres_payload_buf + aml_hw->scanres_payload_buf_offset,
+-- 
+2.43.0
