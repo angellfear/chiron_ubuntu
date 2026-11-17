@@ -18,7 +18,16 @@ PASSWORD=1234
 # plugdev for udisks, sudo for administration. This mirrors what a desktop
 # Ubuntu install gives its first account, minus the groups this board has no
 # hardware for.
-GROUPS=sudo,dialout,audio,video,render,input,plugdev,netdev,users
+#
+# kvm is why this list is not only about hardware attached to the board. udev
+# makes /dev/kvm kvm:0660, and the uaccess ACL that would cover it is granted
+# to whoever is logged in on the seat -- so a guest can be started from the
+# panel session without it, and never over SSH. Anyone who installs qemu and
+# connects remotely would have to usermod themselves into the group and log in
+# again; being in it from the first boot is what makes the host usable without
+# that step. The group exists on any Ubuntu base, and the firstboot script
+# skips names that are not present.
+GROUPS=sudo,dialout,audio,video,render,input,plugdev,netdev,users,kvm
 
 # Set to 1 to force a password change at the first *interactive* login. Off by
 # default because the session autologins: an expired password stops greetd's
