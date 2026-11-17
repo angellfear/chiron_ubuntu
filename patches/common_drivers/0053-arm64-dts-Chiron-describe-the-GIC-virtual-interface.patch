@@ -1,0 +1,47 @@
+From f8a86a7192597e863b68f353ebce9850eac5dc82 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Wed, 18 Nov 2026 01:11:33 +0300
+Subject: [PATCH] arm64: dts: Chiron: describe the GIC virtual interface ranges
+
+KVM needs the virtual CPU interface and the virtual interface control block
+mapped, not just the distributor and the physical CPU interface the SoC
+description carries. Without them kvm_arch_init fails on this board and
+/dev/kvm is never created, so the built-in KVM has no entry point a guest
+could use.
+
+The ranges match the GIC layout of the T7C: distributor at 0xfff01000, CPU
+interface at 0xfff02000, GICH at 0xfff04000 and GICV at 0xfff06000, each
+16 KiB except the distributor's 4 KiB. They go in the board file rather than
+mesont7c.dtsi because the boards described by that dtsi have no reason to
+carry a virtual interface they never use.
+---
+ arch/arm64/boot/dts/amlogic/chiron.dts | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/amlogic/chiron.dts b/arch/arm64/boot/dts/amlogic/chiron.dts
+index 6957fb1..c1b5d2e 100644
+--- a/arch/arm64/boot/dts/amlogic/chiron.dts
++++ b/arch/arm64/boot/dts/amlogic/chiron.dts
+@@ -2281,3 +2281,19 @@
+ &eth_phy {
+ 	status = "disabled";
+ };
++
++/*
++ * The SoC description gives the GIC its distributor and CPU interface only,
++ * which is all a non-virtualised boot needs. KVM also maps the virtual CPU
++ * interface (GICV) and the virtual interface control block (GICH), and with
++ * those ranges missing the hypervisor initialisation fails: /dev/kvm never
++ * appears and there is no way to start a guest. Describe the two extra
++ * regions here rather than in the shared T7C dtsi, where the boards that do
++ * not host guests would carry them for nothing.
++ */
++&gic {
++	reg = <0x0 0xfff01000 0 0x1000>,
++	      <0x0 0xfff02000 0 0x2000>,
++	      <0x0 0xfff04000 0 0x2000>,
++	      <0x0 0xfff06000 0 0x2000>;
++};
+-- 
+2.54.0 (Apple Git-157)
+
