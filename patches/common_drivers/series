@@ -53,3 +53,4 @@
 0049-Chiron-clean-up-validated-boot-diagnostics.patch
 0050-ASoC-meson-keep-deferred-codec-probes-quiet.patch
 0051-arm64-dts-Chiron-skip-unused-Broadcom-WiFi-buffers.patch
+0052-config-build-KVM-into-chiron_defconfig.patch

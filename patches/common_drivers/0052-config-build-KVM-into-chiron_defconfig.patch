@@ -1,0 +1,65 @@
+From 8506c52635d085d89b11b45a96c59a3a371b8976 Mon Sep 17 00:00:00 2001
+From: Chiron Builder <builder@chiron.local>
+Date: Wed, 18 Nov 2026 00:58:25 +0300
+Subject: [PATCH] config: build KVM into chiron_defconfig
+
+The board is also the host for QEMU guests, and this config leaves
+VIRTUALIZATION off: the shipped kernel has no /dev/kvm at all, so a guest
+only starts after the kernel has been rebuilt outside the image build.
+
+KVM goes in built in rather than modular. There is no initramfs stage here
+that would load kvm ahead of the units that start guests, and the root is a
+squashfs image whose modules are optional: /dev/kvm comes from the kernel
+itself on every boot path.
+
+chiron.fragment records this as the port's sixth config delta, next to the
+five it already documents.
+
+Change-Id: Idd8beeabc7cc1f7039cc4303c9e41c5098094d4f
+---
+ arch/arm64/configs/chiron.fragment  | 10 +++++++++-
+ arch/arm64/configs/chiron_defconfig |  3 ++-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/configs/chiron.fragment b/arch/arm64/configs/chiron.fragment
+index 5c65a3c..5d2da05 100644
+--- a/arch/arm64/configs/chiron.fragment
++++ b/arch/arm64/configs/chiron.fragment
+@@ -18,7 +18,7 @@
+ # comes up. CMA_AREAS also drops from 12 to 7.
+ #
+ # Below is the complete delta between that merge result and chiron_defconfig.
+-# Five intentions; everything else in the diff is kconfig pulling in their
++# Six intentions; everything else in the diff is kconfig pulling in their
+ # dependencies.
+ 
+ # The initramfs here is zstd compressed, so the kernel has to be able to
+@@ -59,3 +59,11 @@ CONFIG_IOMMU_SUPPORT=y
+ # The compression algorithm is deliberately left alone.
+ # CONFIG_SQUASHFS_DECOMP_SINGLE is not set
+ CONFIG_SQUASHFS_DECOMP_MULTI_PERCPU=y
++
++# KVM, built in rather than modular. The board is also the host for QEMU
++# guests, and starting one must not depend on an optional module having been
++# autoloaded first: /dev/kvm is created by the kernel itself here. The merge
++# result leaves VIRTUALIZATION off, which takes the whole hypervisor menu
++# with it, so both symbols are set explicitly.
++CONFIG_VIRTUALIZATION=y
++CONFIG_KVM=y
+diff --git a/arch/arm64/configs/chiron_defconfig b/arch/arm64/configs/chiron_defconfig
+index 03ffb12..070a02c 100644
+--- a/arch/arm64/configs/chiron_defconfig
++++ b/arch/arm64/configs/chiron_defconfig
+@@ -554,7 +554,8 @@ CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+ # end of CPU Power Management
+ 
+ CONFIG_HAVE_KVM=y
+-# CONFIG_VIRTUALIZATION is not set
++CONFIG_VIRTUALIZATION=y
++CONFIG_KVM=y
+ CONFIG_ARM64_CRYPTO=y
+ CONFIG_CRYPTO_SHA256_ARM64=y
+ # CONFIG_CRYPTO_SHA512_ARM64 is not set
+-- 
+2.54.0 (Apple Git-157)
+
